@@ -1,0 +1,19 @@
+{
+  "port": 7790,
+  "owner": "the user",
+  "lang": "en",
+  "everyoneWords": ["everyone", "all of you"],
+  "participants": [
+    {
+      "name": "<Claude Code session name>",
+      "label": "<display name>",
+      "aliases": ["<words that call this participant>"],
+      "voice": "<VOICEVOX speaker name>",
+      "style": "<VOICEVOX style name>",
+      "chair": true
+    }
+  ],
+  "overlapSeconds": 1,
+  "dryDeliver": false,
+  "ui": {}
+}

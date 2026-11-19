@@ -1,0 +1,6 @@
+config.json
+.token
+meetings/
+state/
+.DS_Store
+__pycache__/

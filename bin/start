@@ -1,0 +1,4 @@
+#!/bin/bash
+# Start the meetdown server in the foreground. Stop it with Ctrl-C.
+# Set MEETDOWN_NODE to choose the Node binary (Node 22 or later).
+cd "$(dirname "$0")/.." && exec "${MEETDOWN_NODE:-node}" server.mjs

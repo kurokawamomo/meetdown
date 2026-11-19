@@ -1,0 +1,10 @@
+#!/bin/bash
+# Copy the page URL with the token to the clipboard. The token is never printed.
+# Usage: url                    URL for this Mac (http://127.0.0.1:<port>)
+#        url https://<host>     URL behind another entrance, such as Tailscale serve
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+port=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$ROOT/config.json")
+host="${1:-http://127.0.0.1:$port}"
+printf '%s/?t=%s' "${host%/}" "$(cat "$ROOT/.token")" | pbcopy
+echo "Copied the URL with the token to the clipboard. Be careful where you paste it."
