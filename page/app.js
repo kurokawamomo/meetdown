@@ -1,189 +1,121 @@
-// meetdown page. Records only while the button is held, plays AI voices in arrival order, and stops them when pressed.
-const $ = (s) => document.querySelector(s);
-let ui = {};
-let overlap = 1;
-let roster = { partner: null, participants: [] };
-const silenced = new Set(); // cut or dropped utterances; their late audio is not played
+// meetdown page entry. The server's event stream (store) drives push-to-talk, voice playback and the
+// three views (stage, bar, panel); the user's actions go back to the HTTP API. All requests are
+// same-origin, so the cookie carries the token.
+import { createStore } from './store.js';
+import { createTalk } from './talk.js';
+import { createPlayer } from './player.js';
+import { createStage } from './stage.js';
+import { createBar } from './bar.js';
+import { createPanel } from './panel.js';
+import { avatarFor } from './avatar/index.js';
 
-const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
-const note = (t) => { $('#status').textContent = t || ''; };
-const labelOf = (n) => (n === 'human' ? ui.you : n === 'system' ? ui.meeting : (roster.participants.find((p) => p.name === n) || {}).label || n);
+const TRANSCRIBING_MS = 15000; // "transcribing" stays until the answer arrives, but not forever
 
-// ---- Rendering ----
-function applyUi(lang) {
-  document.documentElement.lang = lang;
-  $('#talk').textContent = ui.talk;
-  $('#text').placeholder = ui.placeholder;
-  $('#send').textContent = ui.send;
-}
-function renderPeople() {
-  $('#people').innerHTML = '';
-  for (const p of roster.participants) {
-    const b = document.createElement('button');
-    b.className = 'who' + (p.name === roster.partner ? ' partner' : '') + (p.status === 'absent' ? ' absent' : '');
-    b.textContent = p.label || p.name;
-    const st = document.createElement('span');
-    st.className = 'st';
-    st.textContent = ui[p.status] || p.status;
-    b.append(st);
-    b.onclick = () => post('/api/partner', { name: p.name });
-    $('#people').append(b);
+const store = createStore('/events'); // store.state.connected is false while the stream is down; the bar shows that itself
+const ui = () => store.state.ui;
+let bar = null;
+
+// Local messages go through the bar's toast, which also shows the server's 'note' events
+const say = (text, ms) => {
+  if (bar && typeof bar.note === 'function') bar.note(text, ms);
+  else if (text) console.warn(text);
+};
+const safely = (what, fn) => {
+  try { return fn(); } catch (e) { console.error(what, e); return null; }
+};
+const mount = (id) => document.getElementById(id) || document.body.appendChild(Object.assign(document.createElement('div'), { id }));
+
+async function post(url, body, { quiet = false } = {}) {
+  try {
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+    if (!res.ok && !quiet) say((ui().sendError || '') + res.status);
+    return res;
+  } catch (e) {
+    if (!quiet) say((ui().sendError || '') + e.message);
+    return null;
   }
 }
-function renderUtterance(u) {
-  let el = document.getElementById('u' + u.id);
-  const stick = $('#list').scrollTop + $('#list').clientHeight >= $('#list').scrollHeight - 40;
-  if (!el) { el = document.createElement('div'); el.id = 'u' + u.id; $('#list').append(el); }
-  el.className = 'u ' + (u.from === 'human' ? 'human' : u.kind === 'note' ? 'note' : 'ai');
-  const to = u.to && u.to.length ? ' → ' + u.to.map(labelOf).join(', ') : '';
-  el.innerHTML = '<div class="meta"></div><div class="body"></div>';
-  el.querySelector('.meta').textContent = labelOf(u.from) + to;
-  el.querySelector('.body').textContent = u.text;
-  if (['cut', 'dropped', 'error'].includes(u.play)) {
-    const t = document.createElement('span');
-    t.className = 'tag';
-    t.textContent = ui[u.play];
-    el.querySelector('.meta').append(t);
-  }
-  if (stick) $('#list').scrollTop = $('#list').scrollHeight;
+
+async function fetchLive() {
+  const res = await fetch('/api/live');
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
 }
 
-// ---- Playback: in arrival order; when the speaker changes, the next voice may start `overlap` seconds early ----
-let ctx = null;
-const waiting = []; // not scheduled yet
-const active = [];  // scheduled, including ones set to start later
-let nextAt = 0, lastFrom = null, pumping = false, pressing = false;
-
-function unlockAudio() {
-  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-  if (ctx.state === 'suspended') ctx.resume();
-}
-const decode = (buf) => new Promise((ok, ng) => ctx.decodeAudioData(buf, ok, ng));
-
-function enqueue(a) {
-  if (silenced.has(a.id)) return;
-  a.buf = fetch(a.url).then((r) => r.arrayBuffer());
-  waiting.push(a);
-  pump();
-}
-async function pump() {
-  if (pumping || pressing || !ctx || !waiting.length) return;
-  pumping = true;
-  const a = waiting[0];
-  let buf = null;
-  try { buf = await decode(await a.buf); } catch (_) {}
-  if (waiting[0] !== a || pressing) { pumping = false; return pump(); }
-  waiting.shift();
-  if (buf && !silenced.has(a.id)) {
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(ctx.destination);
-    const at = Math.max(ctx.currentTime, nextAt - (lastFrom && lastFrom !== a.from ? overlap : 0));
-    src.start(at);
-    const item = { id: a.id, seq: a.seq, src, start: at, end: at + buf.duration };
-    active.push(item);
-    if (a.seq === 0) post('/api/play', { id: a.id, state: 'playing' });
-    src.onended = () => {
-      const i = active.indexOf(item);
-      if (i >= 0) active.splice(i, 1);
-      if (a.last && !silenced.has(a.id)) post('/api/play', { id: a.id, state: 'done' });
-    };
-    nextAt = item.end + (a.gap || 0);
-    lastFrom = a.from;
-  }
-  pumping = false;
-  pump();
-}
-// Stop everything. Returns what was playing (utterance and sentence) and what was waiting
-function stopAudio() {
-  const now = ctx ? ctx.currentTime : 0;
-  const playing = active.find((x) => x.start <= now && now < x.end) || null;
-  for (const x of active.splice(0)) { silenced.add(x.id); try { x.src.onended = null; x.src.stop(); } catch (_) {} }
-  const pending = waiting.splice(0).map((x) => x.id);
-  pending.forEach((id) => silenced.add(id));
-  nextAt = 0;
-  lastFrom = null;
-  return { playing: playing && { id: playing.id, seq: playing.seq }, pending: [...new Set(pending)] };
-}
+// ---- Voice playback: the server says when an utterance starts and ends being heard ----
+const player = createPlayer({
+  overlap: () => store.state.overlap,
+  onPlay: (id) => post('/api/play', { id, state: 'playing' }, { quiet: true }),
+  onDone: (id) => post('/api/play', { id, state: 'done' }, { quiet: true }),
+  onSpeaking: (names) => store.patch({ speaking: names }), // the stage shows these names as speaking
+});
+store.on('audio', (a) => player.enqueue(a));
+store.on('stop', () => player.stopAll());
+store.on('utterance', (u) => {
+  if (u && (u.play === 'cut' || u.play === 'dropped')) player.silence(u.id);
+});
 
 // ---- Push to talk ----
-let stream = null, rec = null, chunks = [];
-async function press() {
-  if (pressing) return;
-  pressing = true;
-  unlockAudio();
-  $('#talk').classList.add('on');
-  post('/api/press', stopAudio());
+async function sendRecording(blob, mime) {
+  say(ui().transcribing, TRANSCRIBING_MS);
   try {
-    stream = stream || await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    const res = await fetch('/api/talk', { method: 'POST', headers: { 'Content-Type': mime || 'application/octet-stream' }, body: blob });
+    const d = await res.json().catch(() => null);
+    if (!res.ok || !d) throw new Error((d && d.error) || 'HTTP ' + res.status);
+    say(d.error || (d.text ? '' : ui().unheard));
   } catch (e) {
-    note(ui.micError + e.message);
-    pressing = false;
-    $('#talk').classList.remove('on');
-    return post('/api/cancel', {});
+    say((ui().sendError || '') + e.message);
   }
-  if (!pressing) return; // released while the microphone was starting; release() already cancelled
-  chunks = [];
-  rec = new MediaRecorder(stream);
-  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
-  rec.start();
-}
-function release() {
-  if (!pressing) return;
-  pressing = false;
-  $('#talk').classList.remove('on');
-  if (!rec || rec.state !== 'recording') { post('/api/cancel', {}); return pump(); }
-  const r = rec;
-  r.onstop = async () => {
-    note(ui.transcribing);
-    try {
-      const res = await fetch('/api/talk', { method: 'POST', headers: { 'Content-Type': r.mimeType || 'application/octet-stream' }, body: new Blob(chunks, { type: r.mimeType }) });
-      const d = await res.json();
-      note(d.error || (d.text ? '' : ui.unheard));
-    } catch (e) { note(ui.sendError + e.message); }
-    pump();
-  };
-  r.stop();
 }
 
-const talk = $('#talk');
-talk.addEventListener('pointerdown', (e) => { e.preventDefault(); talk.setPointerCapture(e.pointerId); press(); });
-talk.addEventListener('pointerup', release);
-talk.addEventListener('pointercancel', release);
-talk.addEventListener('contextmenu', (e) => e.preventDefault());
-const typing = () => document.activeElement && document.activeElement.tagName === 'INPUT';
-document.addEventListener('keydown', (e) => { if (e.code === 'Space' && !typing()) { e.preventDefault(); if (!e.repeat) press(); } });
-document.addEventListener('keyup', (e) => { if (e.code === 'Space' && !typing()) { e.preventDefault(); release(); } });
-$('#form').addEventListener('submit', (e) => {
-  e.preventDefault();
-  unlockAudio();
-  const t = $('#text').value.trim();
-  if (t) post('/api/text', { text: t });
-  $('#text').value = '';
+const talk = createTalk({
+  holdMs: () => store.state.holdMs,
+  enabled: () => !['closing', 'closed'].includes(store.state.meeting && store.state.meeting.state), // nothing to say to a finished meeting
+  unlock: player.unlock,
+  onPress: () => post('/api/press', player.stopAll(), { quiet: true }), // barge-in: stop the voices and tell the server what was cut
+  onSend: sendRecording,
+  onCancel: () => post('/api/cancel', {}, { quiet: true }),
 });
-document.addEventListener('pointerdown', unlockAudio, { once: true });
+talk.onChange((state, error) => {
+  player.hold(state !== 'idle'); // AI voices wait while the microphone is open
+  if (error) say((ui().micError || '') + error.message);
+});
+talk.bindKey(document);
 
-// ---- Server events ----
-const es = new EventSource('/events');
-es.addEventListener('snapshot', (e) => {
-  const d = JSON.parse(e.data);
-  ui = d.ui;
-  overlap = d.overlap;
-  roster = { partner: d.partner, participants: d.participants };
-  applyUi(d.lang);
-  document.title = 'meetdown ' + d.meetingId;
-  $('#list').innerHTML = '';
-  for (const u of d.list) renderUtterance(u);
-  renderPeople();
+// Audio can only start after a gesture; every kind of gesture tries again
+for (const type of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) document.addEventListener(type, player.unlock, { capture: true, passive: true });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) player.unlock(); });
+
+// ---- Meeting changes ----
+let meetingId = null;
+store.on('snapshot', () => {
+  const id = store.state.meeting && store.state.meeting.id;
+  if (id !== meetingId) {
+    if (meetingId !== null) player.reset(); // a new meeting restarts utterance ids
+    meetingId = id;
+  }
 });
-es.addEventListener('utterance', (e) => {
-  const u = JSON.parse(e.data);
-  if (u.play === 'cut' || u.play === 'dropped') silenced.add(u.id);
-  renderUtterance(u);
+store.on('meeting', (m) => {
+  if (m && m.state === 'closed') talk.closeMic();
 });
-es.addEventListener('participants', (e) => { roster = JSON.parse(e.data); renderPeople(); });
-es.addEventListener('audio', (e) => enqueue(JSON.parse(e.data)));
-es.addEventListener('stop', () => { stopAudio(); });
-es.addEventListener('note', (e) => note(JSON.parse(e.data).text));
-es.onerror = () => note(ui.reconnecting);
-es.onopen = () => note('');
+
+// ---- Views ----
+safely('stage', () => createStage(mount('stage'), {
+  store,
+  talk,
+  avatarFor,
+  onFocus: (name) => post('/api/focus', { name }),
+  onAside: (name) => post('/api/aside', { name }),
+  onDismiss: (name) => post('/api/dismiss', { name }),
+}));
+bar = safely('bar', () => createBar(mount('bar'), {
+  store,
+  talk,
+  fetchLive,
+  onText: (text) => post('/api/text', { text }),
+  onInvite: (name) => post('/api/invite', { name }),
+  onLeave: () => post('/api/leave', {}),
+  onBack: () => post('/api/back', {}),
+  onTaste: (taste, name = '*') => post('/api/taste', { name, taste }),
+}));
+safely('panel', () => createPanel(mount('panel'), { store }));

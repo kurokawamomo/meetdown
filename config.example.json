@@ -3,17 +3,27 @@
   "owner": "the user",
   "lang": "en",
   "everyoneWords": ["everyone", "all of you"],
-  "participants": [
-    {
-      "name": "<Claude Code session name>",
+  "inviteWords": ["invite", "bring in"],
+  "sessionReadings": { "<tmux session name>": ["<how you say it>"] },
+  "autoJoin": ["<Claude Code session name of the chair>"],
+  "people": {
+    "<Claude Code session name>": {
       "label": "<display name>",
       "aliases": ["<words that call this participant>"],
       "voice": "<VOICEVOX speaker name>",
       "style": "<VOICEVOX style name>",
-      "chair": true
+      "chair": true,
+      "taste": "critters",
+      "look": { "species": "fox", "color": "#f2a7a3", "accessory": "bowtie" }
     }
-  ],
+  },
+  "voicePool": [{ "voice": "<VOICEVOX speaker name>", "style": "<style name>" }],
+  "defaultTaste": "critters",
+  "shareMinutes": 2,
+  "leaveGraceSeconds": 10,
+  "holdMs": 300,
   "overlapSeconds": 1,
+  "claudeBin": "claude",
   "dryDeliver": false,
   "ui": {}
 }

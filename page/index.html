@@ -3,38 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#131314">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>meetdown</title>
-<style>
-  :root { --bg: #f6f5f2; --fg: #1d1d1f; --muted: #6e6e73; --card: #fff; --line: #e3e1dc; --accent: #2f6fde; --rec: #d93b30; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #161617; --fg: #f2f2f2; --muted: #9a9aa0; --card: #232325; --line: #36363a; --accent: #6b9cff; --rec: #ff6b5e; } }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 16px/1.6 -apple-system, "Hiragino Sans", sans-serif; }
-  body { display: flex; flex-direction: column; padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom); }
-  header { padding: 12px 0 8px; display: flex; gap: 8px; flex-wrap: wrap; }
-  .who { border: 1px solid var(--line); background: var(--card); color: var(--fg); border-radius: 999px; padding: 6px 14px; font-size: 15px; cursor: pointer; }
-  .who.partner { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; font-weight: 600; }
-  .who .st { color: var(--muted); font-size: 13px; margin-left: 6px; }
-  .who.absent { opacity: .45; }
-  #list { flex: 1; overflow-y: auto; padding: 8px 0; }
-  .u { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; margin: 8px 0; max-width: 92%; }
-  .u.human { margin-left: auto; }
-  .u .meta { color: var(--muted); font-size: 12px; }
-  .u.note { background: transparent; border-style: dashed; color: var(--muted); font-size: 14px; }
-  .tag { display: inline-block; font-size: 11px; border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; margin-left: 6px; color: var(--muted); }
-  #status { color: var(--muted); font-size: 13px; min-height: 20px; }
-  form { display: flex; gap: 8px; margin: 6px 0; }
-  input { flex: 1; font-size: 16px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
-  #talk { width: 100%; padding: 22px 0; margin: 6px 0 12px; border: none; border-radius: 16px; background: var(--accent); color: #fff; font-size: 18px; font-weight: 600;
-    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; }
-  #talk.on { background: var(--rec); }
-</style>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/meet.css">
 </head>
 <body>
-  <header id="people"></header>
-  <div id="list"></div>
-  <div id="status"></div>
-  <form id="form"><input id="text" autocomplete="off"><button id="send"></button></form>
-  <button id="talk"></button>
-  <script src="/app.js"></script>
+  <!-- Roots only. Every visible string is rendered from ui (store.state.ui) by stage.js, bar.js and panel.js. -->
+  <div id="app" class="app">
+    <div id="main" class="main">
+      <main id="stage" class="stage"></main>
+      <aside id="panel" class="panel"></aside>
+    </div>
+    <footer id="bar" class="bar"></footer>
+  </div>
+  <div id="overlays" class="overlays"></div>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>
