@@ -1,6 +1,7 @@
 // meetdown page entry. The server's event stream (store) drives push-to-talk, voice playback and the
 // three views (stage, bar, panel); the user's actions go back to the HTTP API. All requests are
 // same-origin, so the cookie carries the token.
+import { createCaptions } from './captions.js';
 import { createStore } from './store.js';
 import { createTalk } from './talk.js';
 import { createPlayer } from './player.js';
@@ -164,3 +165,4 @@ bar = safely('bar', () => createBar(mount('bar'), {
   onBack: () => post('/api/back', {}),
 }));
 safely('panel', () => createPanel(mount('panel'), { store }));
+safely('captions', () => createCaptions(mount('captions'), { store }));
