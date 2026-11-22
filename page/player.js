@@ -7,8 +7,8 @@
 // by rule and not by anyone's judgement: while the human records nothing plays (a murmur that is sounding is
 // cut), a murmur starts only while no normal voice is audible, and a normal voice waits for a sounding murmur.
 // The exceptions: a short murmur (SHORT_MURMUR characters at most) and a voiced thought (thought: true) may sound over
-// the human, quieter while the human is loud (setInputLevel). A voiced thought is quieter still and fades out in its
-// second half, so it is heard as someone about to speak.
+// the human, quieter while the human is loud (setInputLevel). A voiced thought is quieter still and fades out early,
+// so it is heard as someone about to speak.
 // Text for the balloons: onSentence(from, text, id) when a sentence of normal speech starts, onClear(from, id)
 // when the utterance ends or is cut, onMurmur(id, from, text) when a murmur sentence starts.
 //
@@ -274,10 +274,10 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     const src = ctx.createBufferSource();
     const gain = ctx.createGain();
     gain.gain.value = murmurGain(m.thought);
-    if (m.thought) { // full for the first half, then fading to silence
-      const half = ctx.currentTime + m.audio.duration / 2;
-      gain.gain.setValueAtTime(gain.gain.value, half);
-      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + m.audio.duration);
+    if (m.thought) { // full for the first quarter, silent by 60%
+      const d = m.audio.duration;
+      gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime + d * 0.25);
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + d * 0.6);
     }
     src.buffer = m.audio;
     src.connect(gain);
