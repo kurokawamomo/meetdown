@@ -152,6 +152,11 @@ svg { display: block; fill: currentColor; }
   pointer-events: none;
 }
 .tile-avatar > * { display: block; width: 100%; height: 100%; }
+/* pixel balls are framed close, like a face near the camera: bigger and a little low; the balloon may cover the ears */
+.tile[data-taste="pixel"] { --av: clamp(96px, 50vmin, 600px); }
+@supports (width: 1cqmin) { .tile[data-taste="pixel"] { --av: clamp(96px, 80cqmin, 600px); } }
+.tile[data-taste="pixel"] .tile-avatar { top: 57%; }
+.tile[data-taste="pixel"] .balloons { bottom: calc(43% + var(--av) * .1); }
 .avatar-fallback {
   display: flex;
   align-items: center;
@@ -402,7 +407,7 @@ svg { display: block; fill: currentColor; }
 
 .stage.presenting { flex-direction: row; gap: var(--pad); overflow: hidden; }
 .stage.presenting .grid {
-  flex: 0 0 clamp(168px, 20vw, 236px);
+  flex: 0 0 clamp(268px, 32vw, 380px);
   width: auto;
   margin: 0;
   flex-direction: column;
@@ -998,7 +1003,7 @@ body[data-panel="open"] .panel { display: flex; }
 
   .stage.presenting { flex-direction: column; gap: 8px; }
   .stage.presenting .grid { flex: 0 0 auto; width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; }
-  .stage.presenting .tile { flex: 0 0 auto; width: 112px; height: 84px; aspect-ratio: auto; }
+  .stage.presenting .tile { flex: 0 0 auto; width: 176px; height: 132px; aspect-ratio: auto; }
   .stage.presenting .balloons { display: none; }
   .invite-ask { bottom: calc(100% + 52px); }
   .bar.has-ask .toast { bottom: calc(100% + 100px); }

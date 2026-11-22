@@ -155,8 +155,11 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
     return id;
   });
   const stopEvery = timers.clearInterval || ((id) => clearInterval(id));
-  const interimMs = () => {
-    const v = Number(typeof interimSeconds === 'function' ? interimSeconds() : interimSeconds);
+  // interimSeconds may be a list: the n-th cut uses the n-th value and the last one repeats, so cuts can grow longer
+  const interimMs = (part = 0) => {
+    const raw = typeof interimSeconds === 'function' ? interimSeconds() : interimSeconds;
+    const list = Array.isArray(raw) ? raw : [raw];
+    const v = Number(list[Math.min(part, list.length - 1)]);
     return Number.isFinite(v) ? v * 1000 : DEFAULT_INTERIM_SECONDS * 1000;
   };
   const detector = createPauseDetector();
@@ -260,7 +263,7 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
       call(onLevel, Math.min(1, rms * LEVEL_GAIN));
       setPaused(detector.feed(rms, t));
     }
-    if (segmentDue({ startedAt: a.segAt, now: t, intervalMs: interimMs() })) rotate(a);
+    if (segmentDue({ startedAt: a.segAt, now: t, intervalMs: interimMs(a.part) })) rotate(a);
   }
 
   function endTicks(a) {

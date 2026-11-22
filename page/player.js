@@ -3,14 +3,13 @@
 // changes, the next voice may start `overlap` seconds before the previous one ends. While the human is
 // recording (hold) nothing new is scheduled. stopAll() reports what the human interrupted.
 //
-// Murmurs (audio with murmur: true) play on their own track at 50% gain, one at a time. While the human records
-// they are held, and released only while setPaused(true) (a detected pause) or after the recording ended; a murmur
-// that has started may finish. A murmur starts only while no normal voice is audible, so at most two voices
-// sound at once. expectFront(n) puts the next n murmur utterances ahead of the queued ones.
+// Murmurs (audio with murmur: true) play on their own track at 50% gain, one at a time. One voice at a time,
+// by rule and not by anyone's judgement: while the human records nothing plays (a murmur that is sounding is
+// cut), a murmur starts only while no normal voice is audible, and a normal voice waits for a sounding murmur.
 // Text for the balloons: onSentence(from, text, id) when a sentence of normal speech starts, onClear(from, id)
 // when the utterance ends or is cut, onMurmur(id, from, text) when a murmur sentence starts.
 //
-// Beyond the contract: hold(on), setPaused(on), expectFront(n) and reset(). `overlap` may be a number or a function returning one.
+// Beyond the contract: hold(on) and reset(). `overlap` may be a number or a function returning one.
 // onPlay(id, from) fires when the first sentence of an utterance becomes audible (not when it is queued),
 // onDone(id) when its last sentence has finished, onSpeaking(names) whenever the set of audible
 // speakers changes (two speakers are audible while their voices overlap; the newest is last).
@@ -18,7 +17,6 @@
 const TICK_MS = 50;
 const FETCH_TIMEOUT_MS = 15000;
 const MURMUR_GAIN = 0.5;
-const FRONT_EXPIRE_MS = 4000;
 const HEARD_IN_PART_SEC = 10; // a half-heard utterance still counts as "playing" this long after a sentence ended
 
 export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSentence, onClear, onMurmur, env = {} } = {}) {
@@ -37,8 +35,6 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
   const mwaiting = []; // murmur sentences, arrived and not played yet
   let mplaying = null; // the murmur sentence sounding now
   let mpumping = false;
-  let paused = false; // a pause in the human's speech was detected
-  let front = { count: 0, ids: new Set(), until: 0 };
 
   const every = env.setInterval || ((fn, ms) => setInterval(fn, ms));
   const stopEvery = env.clearInterval || ((id) => clearInterval(id));
@@ -91,10 +87,10 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
 
   // Decode in arrival order and put each sentence on the timeline
   async function pump() {
-    if (pumping || held || !ctx) return;
+    if (pumping || held || mplaying || !ctx) return;
     pumping = true;
     try {
-      while (waiting.length && !held) {
+      while (waiting.length && !held && !mplaying) {
         const a = waiting[0];
         if (!a.loaded) {
           const raw = await a.raw;
@@ -102,7 +98,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
           a.loaded = true;
         }
         if (waiting[0] !== a) continue; // removed while loading; look at the new head
-        if (held) break; // recording started; keep it for later (already decoded)
+        if (held || mplaying) break; // recording or a murmur started; keep it for later (already decoded)
         waiting.shift();
         if (silenced.has(a.id)) continue;
         if (!a.audio) { // could not load: skip the sentence, but still close the utterance
@@ -233,30 +229,13 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
   }
 
   // ---- Murmurs ----
-  const murmurAllowed = () => !held || paused;
+  const murmurAllowed = () => !held;
 
   function enqueueMurmur(a) {
     const ctrl = new AbortController();
     const m = { id: a.id, seq: a.seq, from: a.from, text: a.text || '', ctrl, raw: fetchRaw(a.url, ctrl), loaded: false, audio: null };
-    const now = Date.now();
-    if (front.count > 0 && now > front.until) front = { count: 0, ids: new Set(), until: 0 };
-    let at = mwaiting.length;
-    if (front.ids.has(a.id)) { // a thought that was asked for goes after the earlier ones of its kind, before the rest
-      at = 0;
-      while (at < mwaiting.length && front.ids.has(mwaiting[at].id)) at++;
-    } else if (front.count > 0) {
-      front.ids.add(a.id);
-      front.count--;
-      at = 0;
-      while (at < mwaiting.length && front.ids.has(mwaiting[at].id)) at++;
-    }
-    mwaiting.splice(at, 0, m);
+    mwaiting.push(m);
     pumpMurmurs();
-  }
-
-  // Next n murmur utterances to arrive (for example the voiced thoughts) play before the queued ones
-  function expectFront(n) {
-    front = { count: Math.max(0, n | 0), ids: new Set(), until: Date.now() + FRONT_EXPIRE_MS };
   }
 
   async function pumpMurmurs() {
@@ -271,7 +250,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
           m.loaded = true;
         }
         if (mwaiting[0] !== m) continue;
-        if (!murmurAllowed() || audible().length) break; // tick() tries again
+        if (!murmurAllowed() || items.length) break; // a normal voice is sounding or scheduled; tick() tries again
         mwaiting.shift();
         if (silenced.has(m.id) || !m.audio) continue;
         playMurmur(m);
@@ -291,8 +270,9 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     mplaying = { src, gain };
     src.onended = () => {
       try { src.disconnect(); gain.disconnect(); } catch (_) {}
-      mplaying = null;
+      if (mplaying && mplaying.src === src) mplaying = null;
       tick();
+      pump();
       pumpMurmurs();
     };
     src.start();
@@ -300,15 +280,15 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     call(onMurmur, m.id, m.from, m.text);
   }
 
-  // The human paused (true) or went on talking (false): murmurs are released during a pause
-  function setPaused(on) {
-    paused = !!on;
-    if (paused) pumpMurmurs();
-  }
-
   // Block (true) or allow (false) putting new sentences on the timeline; arrivals still download
   function hold(on) {
     held = !!on;
+    if (held && mplaying) { // the human speaks: a sounding murmur stops at once
+      const { src, gain } = mplaying;
+      mplaying = null;
+      src.onended = null;
+      try { src.stop(); src.disconnect(); gain.disconnect(); } catch (_) {}
+    }
     if (!held) { pump(); pumpMurmurs(); }
   }
 
@@ -316,9 +296,8 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
   function reset() {
     stopAll();
     for (const m of mwaiting.splice(0)) m.ctrl.abort();
-    front = { count: 0, ids: new Set(), until: 0 };
     silenced.clear();
   }
 
-  return { unlock, enqueue, stopAll, speakingFrom, silence, hold, setPaused, expectFront, reset };
+  return { unlock, enqueue, stopAll, speakingFrom, silence, hold, reset };
 }

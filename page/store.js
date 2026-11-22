@@ -22,11 +22,11 @@ const serverDefaults = () => ({
   share: null, // { id, kind, src, caption, version, by } or null
   scroll: null, // { percent } of the last scroll event
   interim: {}, // live text of the turns being spoken: { [turn]: { text, parts: { [n]: text }, at } }
-  interimSeconds: 15,
+  interimSeconds: [15, 20, 25],
   list: [],
   ui: {},
   lang: 'en',
-  overlap: 1,
+  overlap: 0,
   holdMs: 300,
   tastes: null,
   me: { owner: '' },

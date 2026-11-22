@@ -45,10 +45,11 @@
   "shareMinutes": 2,
   "leaveGraceSeconds": 10,
   "holdMs": 300,
-  "overlapSeconds": 1,
+  "overlapSeconds": 0,
   "claudeBin": "claude",
   "dryDeliver": false,
   "ui": {},
   "speechSpeed": 1.0,
-  "interimSeconds": 15
+  "interimSeconds": [15, 20, 25],
+  "murmurMaxChars": 30
 }

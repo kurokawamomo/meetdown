@@ -10,8 +10,6 @@ import { createPanel } from './panel.js';
 import { avatarFor } from './avatar/index.js';
 
 const TRANSCRIBING_MS = 15000; // "transcribing" stays until the answer arrives, but not forever
-const THOUGHTS_PER_PAUSE = 2; // unvoiced thoughts that are read out at one pause
-const THOUGHT_GRACE_MS = 900; // after asking for thought voices, queued murmurs wait this long for them to arrive
 
 const store = createStore('/events'); // store.state.connected is false while the stream is down; the bar shows that itself
 const ui = () => store.state.ui;
@@ -59,16 +57,9 @@ store.on('audio', (a) => player.enqueue(a));
 store.on('stop', () => player.stopAll());
 
 // ---- Thoughts and murmurs ----
-// A thought is shown at once. At a pause in the human's speech, up to two of the latest thoughts that were not
-// read out yet are voiced by the server (as murmur audio); only then are the queued murmurs released.
-const thoughts = new Map(); // name -> { text, at, voiced }
-let thoughtSeq = 0;
+// A thought is shown as text only and is never read out.
 store.on('thought', (d) => {
-  if (!d || !d.name) return;
-  if (stage) stage.showThought(d.name, d.text || '');
-  const old = thoughts.get(d.name);
-  if (!d.text) thoughts.delete(d.name);
-  else if (!old || old.text !== d.text) thoughts.set(d.name, { text: d.text, at: ++thoughtSeq, voiced: false });
+  if (d && d.name && stage) stage.showThought(d.name, d.text || '');
 });
 store.on('murmur', (d) => {
   if (d && d.name && d.text && stage) stage.showMurmur(d.name, d.text); // before the audio is ready
@@ -83,22 +74,6 @@ store.on('inviteAsk', (d) => {
   );
 });
 
-let releaseTimer = null;
-function releaseVoices() {
-  clearTimeout(releaseTimer);
-  const fresh = [...thoughts].filter(([, t]) => !t.voiced).sort((x, y) => y[1].at - x[1].at).slice(0, THOUGHTS_PER_PAUSE);
-  if (!fresh.length) return player.setPaused(true);
-  player.expectFront(fresh.length);
-  for (const [name, t] of fresh) {
-    t.voiced = true; // each thought is read out at most once
-    post('/api/thought-voice', { name }, { quiet: true });
-  }
-  releaseTimer = setTimeout(() => player.setPaused(true), THOUGHT_GRACE_MS);
-}
-function resumeTalking() {
-  clearTimeout(releaseTimer);
-  player.setPaused(false);
-}
 store.on('utterance', (u) => {
   if (u && (u.play === 'cut' || u.play === 'dropped')) player.silence(u.id);
 });
@@ -133,12 +108,9 @@ const talk = createTalk({
   onSend: sendRecording,
   onCancel: () => post('/api/cancel', {}, { quiet: true }),
   onLevel: (level) => bar && typeof bar.setLevel === 'function' && bar.setLevel(level),
-  onPause: (paused) => (paused ? releaseVoices() : resumeTalking()),
 });
 talk.onChange((state, error) => {
-  player.hold(state !== 'idle'); // AI voices wait while the microphone is open
-  if (state === 'idle') releaseVoices(); // after the release: thoughts first, then the queued murmurs
-  else resumeTalking();
+  player.hold(state !== 'idle'); // no AI voice while the microphone is open
   if (error) say((ui().micError || '') + error.message);
 });
 talk.bindKey(document);

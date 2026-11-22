@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Speak, murmur, pass the baton or share a screen in a meetdown meeting from an AI pane.
 Usage: meet-say "what to say"                      speak (normal voice, big balloon)
-       meet-say --murmur "short remark"            murmur (half volume, small balloon; held while the human talks)
+       meet-say --murmur "short remark"            murmur (half volume, small balloon; held while the human talks; at most murmurMaxChars, 30 by default)
        meet-say --pass <name> "what to say"        speak and hand the baton to <name>
        meet-say --share <path-or-url> ["caption"]  show a file (html, pdf, png, jpg, svg) or a URL to everyone
        meet-say --scroll <0-100>                   scroll the shared page

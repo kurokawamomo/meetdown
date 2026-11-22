@@ -1,18 +1,34 @@
-// Avatar taste "pixel": pixel-art plush animals on a 32 x 32 grid, drawn as SVG rects and animated by frame swapping.
+// Avatar taste "pixel": a plush ball (head and body in one, no limbs) on a 32 x 32 grid, drawn as SVG rects and
+// animated by frame swapping. Parts and colours are recombined from the seed (the participant name), so a name always
+// gets the same character and every name gets a different mix.
 //
 // create({ seed, look, label }) -> { el, mood, setMood(mood), destroy() }
 //   el      an <svg> that fills the square box its parent gives it; the viewBox is recomputed on resize so one art pixel
 //           is always a whole number of device pixels (crisp edges, equal pixel sizes)
 //   setMood swaps one class on the root; every frame stays in the DOM and CSS (prefix px-) toggles visibility in steps
-//   look    optional overrides: { species, color, accessory, accessoryColor }
-//           species fox | cat | bear | rabbit | owl, color '#rrggbb', accessory bowtie | ribbon | glasses | scarf | hat | none
+//   look    optional overrides, each one independent:
+//           seed       any string; replaces the name as the seed (change it to get a new character)
+//           species    preset for ears + tail: fox | cat | bear | rabbit | owl | dog | mouse
+//           ears       one of EARS, tail one of TAILS, whiskers true | false
+//           accessory  one of ACCESSORIES, color / accessoryColor '#rrggbb'
 // traitsOf({ seed, look }) returns the chosen traits without touching the DOM.
 
 import { MOODS } from './mood.js';
 
 export const id = 'pixel';
-export const SPECIES = ['fox', 'cat', 'bear', 'rabbit', 'owl'];
-export const ACCESSORIES = ['bowtie', 'ribbon', 'glasses', 'scarf', 'hat', 'none'];
+export const EARS = ['fox', 'cat', 'bear', 'rabbit', 'owl', 'dog', 'mouse', 'sprout', 'none'];
+export const TAILS = ['plume', 'curl', 'puff', 'none'];
+export const ACCESSORIES = ['bowtie', 'ribbon', 'glasses', 'scarf', 'hat', 'flower', 'none'];
+const PRESETS = {
+  fox: { ears: 'fox', tail: 'plume' },
+  cat: { ears: 'cat', tail: 'curl', whiskers: true },
+  bear: { ears: 'bear', tail: 'none' },
+  rabbit: { ears: 'rabbit', tail: 'puff' },
+  owl: { ears: 'owl', tail: 'none' },
+  dog: { ears: 'dog', tail: 'curl' },
+  mouse: { ears: 'mouse', tail: 'curl' },
+};
+export const SPECIES = Object.keys(PRESETS);
 
 const N = 32;
 const HUES = [350, 12, 28, 44, 140, 168, 190, 208, 230, 262, 290, 322];
@@ -69,19 +85,29 @@ function toward(h, target, amount) {
   return h + d;
 }
 
+const pick = (list, x) => list[Math.floor(x * list.length)];
+
 export function traitsOf({ seed = '', look = {} } = {}) {
-  const rnd = mulberry32(hash32('px|' + String(seed)));
-  const r = Array.from({ length: 12 }, rnd); // fixed draw order: overriding one trait never shifts the others
   const l = look || {};
-  const species = SPECIES.includes(l.species) ? l.species : SPECIES[Math.floor(r[0] * SPECIES.length)];
-  const accessory = ACCESSORIES.includes(l.accessory) ? l.accessory : ACCESSORIES[Math.floor(r[1] * ACCESSORIES.length)];
+  const key = String(l.seed || seed);
+  const rnd = mulberry32(hash32('px|' + key));
+  const r = Array.from({ length: 16 }, rnd); // fixed draw order: overriding one trait never shifts the others
+  const preset = PRESETS[l.species] || null;
+  const ears = EARS.includes(l.ears) ? l.ears : preset ? preset.ears : pick(EARS, r[0]);
+  const tail = TAILS.includes(l.tail) ? l.tail : preset ? preset.tail : pick(TAILS, r[9]);
+  const whiskers = typeof l.whiskers === 'boolean' ? l.whiskers : preset ? !!preset.whiskers : r[10] < 0.25;
+  const accessory = ACCESSORIES.includes(l.accessory) ? l.accessory : pick(ACCESSORIES, r[1]);
   const color = toHsl(l.color) || { h: HUES[Math.floor(r[2] * HUES.length)] + (r[3] - 0.5) * 12, s: 56 + r[4] * 18, l: 74 + r[5] * 6 };
+  const accessoryColor = toHsl(l.accessoryColor) || (r[11] < 0.5 ? null : { h: HUES[Math.floor(r[12] * HUES.length)], s: 62, l: 62 });
   return {
-    key: String(seed),
-    species,
+    key,
+    species: l.species || null,
+    ears,
+    tail,
+    whiskers,
     accessory,
     color,
-    accessoryColor: toHsl(l.accessoryColor) || null,
+    accessoryColor,
     blinkEvery: 5.2 + r[6] * 2.4,
     blinkPhase: -(r[7] * 6),
     tailPhase: -(r[8] * 4),
@@ -113,6 +139,9 @@ function paletteOf({ h, s, l }, accent) {
     z: hsl(ah, as + 4, al - 14),
     t: '#e9788a',
     f: '#d9e6ff',
+    i: hsl(toward(h, 30, 30) + 10, 62, 52),
+    v: hsl(108, 50, 56),
+    V: hsl(118, 46, 38),
   };
 }
 
@@ -188,110 +217,91 @@ function stack(groups, out = blank()) {
   return out;
 }
 
-// ---------- species ----------
+// ---------- ball, ears, tails ----------
 
 const BCX = 16;
-const BCY = 18.5;
-const BRX = 10.4;
-const BRY = 11.0;
+const BCY = 18.6;
+const BRX = 10.8;
+const BRY = 11.4;
+const EYE_X = 9; // left eye column; the right eye mirrors it
+const EYE_Y = 16;
+const EYE_C = [[11.5, 18.5], [20.5, 18.5]]; // eye centres (owl discs, glasses)
 
-function blob(g, footKey) {
-  for (const cx of [11.6, 20.4]) ell(g, cx, 29.4, 3.1, 2.2, footKey || ((x, y, u, v) => lit(u, v, false)), { n: 2 });
-  ell(g, BCX, BCY, BRX, BRY, (x, y, u, v) => lit(u, v), { n: 2.25 });
+const ball = (g) => ell(g, BCX, BCY, BRX, BRY, (x, y, u, v) => lit(u, v), { n: 2.05 });
+const flat = (x, y, u, v) => lit(u, v, false);
+
+// Ears behind the ball go to `under`; ears that hang over it go to `over` (outlined on top of the ball).
+function earsOf(kind, under, over, face) {
+  for (const m of [false, true]) {
+    const P = (x, y) => [m ? N - x : x, y];
+    const X = (x) => (m ? N - x : x);
+    if (kind === 'fox') {
+      tri(under, [P(6.8, 1.6), P(4.8, 13.6), P(14.4, 9.6)], 'b');
+      tri(under, [P(7.2, 5.4), P(6.6, 12.6), P(11.4, 10.4)], 'p');
+    } else if (kind === 'cat') {
+      tri(under, [P(6.8, 2.6), P(5.0, 13.0), P(13.2, 9.6)], 'b');
+      tri(under, [P(7.4, 6.2), P(6.6, 12.4), P(11.0, 10.4)], 'p');
+    } else if (kind === 'bear') {
+      ell(under, X(7.4), 9.6, 3.5, 3.4, flat);
+      ell(under, X(7.6), 10.0, 1.7, 1.6, 'p');
+    } else if (kind === 'rabbit') {
+      const rot = m ? 10 : -10;
+      ell(under, X(10.4), 5.4, 2.8, 8.0, flat, { rot });
+      ell(under, X(10.6), 6.0, 1.3, 5.6, 'p', { rot });
+    } else if (kind === 'owl') {
+      tri(under, [P(6.2, 3.4), P(5.4, 12.0), P(12.6, 9.6)], 'd');
+    } else if (kind === 'dog') {
+      ell(over, X(6.4), 14.6, 2.7, 5.8, (x, y, u, v) => (lit(u, v, false) === 'b' ? 'd' : 'D'), { rot: m ? -16 : 16 });
+    } else if (kind === 'mouse') {
+      ell(under, X(7.0), 7.8, 4.6, 4.4, flat);
+      ell(under, X(7.2), 8.2, 2.6, 2.4, 'p');
+    }
+  }
+  if (kind === 'sprout') {
+    rect(under, 16, 3, 1, 5, 'V');
+    ell(under, 13.4, 4.0, 2.8, 1.4, 'v', { rot: -25 });
+    ell(under, 19.6, 3.4, 2.8, 1.4, 'v', { rot: 25 });
+  }
+  if (kind === 'owl') {
+    face.eyeDisc = true;
+    face.beak = true;
+    face.cheeks = false;
+  }
 }
 
-// Each species returns { tail: grid|null, body: grid } plus face hints.
-function speciesParts(sp) {
-  const tail = blank();
-  const body = blank();
-  let hasTail = true;
-  const face = { eyeDisc: false, beak: false, cheeks: true };
-
-  if (sp === 'fox') {
-    // big tail rising on the right, pale tip with a chevron edge
-    ell(tail, 26.3, 20.4, 5.3, 10.8, (x, y, u, v) => {
+function tailOf(kind, g) {
+  if (kind === 'plume') {
+    ell(g, 26.0, 19.0, 5.6, 10.2, (x, y, u, v) => {
       const k = lit(u, v);
       if (v < -0.6) return k === 'd' || k === 'D' ? 'c' : 'w';
       return k;
-    }, { rot: 12 });
-    const ear = (m) => {
-      const P = (x, y) => [m ? N - x : x, y];
-      tri(body, [P(6.8, 1.6), P(4.8, 13.6), P(14.4, 9.6)], 'b');
-      tri(body, [P(7.2, 5.4), P(6.6, 12.6), P(11.4, 10.4)], 'p');
-    };
-    ear(false); ear(true);
-    blob(body);
-    // pale muzzle
-    ell(body, 16, 21.8, 4.9, 3.1, (x, y) => (y > 23 ? 'c' : 'w'), { n: 2.4 });
-  } else if (sp === 'cat') {
-    // thin curled tail
+    }, { rot: 16 });
+  } else if (kind === 'curl') {
     const pts = [[25, 28], [28, 27], [29.5, 24], [29.5, 20.5], [28.5, 17.5], [29.5, 15]];
     for (let i = 0; i < pts.length - 1; i++) {
       const [x0, y0] = pts[i];
       const [x1, y1] = pts[i + 1];
-      for (let t = 0; t <= 1; t += 0.05) {
-        const px = x0 + (x1 - x0) * t;
-        const py = y0 + (y1 - y0) * t;
-        ell(tail, px, py, 1.9, 1.9, (x, y, u, v) => lit(u, v, false), { n: 2 });
-      }
+      for (let t = 0; t <= 1; t += 0.05) ell(g, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 1.9, 1.9, flat);
     }
-    const ear = (m) => {
-      const P = (x, y) => [m ? N - x : x, y];
-      tri(body, [P(6.8, 2.0), P(5.0, 13.0), P(13.2, 9.6)], 'b');
-      tri(body, [P(7.4, 5.8), P(6.6, 12.4), P(11.0, 10.4)], 'p');
-    };
-    ear(false); ear(true);
-    blob(body);
-    // whiskers
-    for (const [x, y] of [[2, 18], [3, 19], [4, 19], [2, 22], [3, 21], [4, 21]]) { body[y][x] = 'W'; body[y][N - 1 - x] = 'W'; }
-    // forehead stripes
-    for (const [x, y0, y1] of [[15, 9, 11], [16, 9, 11], [12, 10, 11], [19, 10, 11]]) for (let y = y0; y <= y1; y++) body[y][x] = 'd';
-    // pale chin
-    ell(body, 16, 22.4, 4.2, 2.4, 'w', { n: 2.4 });
-  } else if (sp === 'bear') {
-    hasTail = false;
-    const ear = (m) => {
-      const cx = m ? N - 7.4 : 7.4;
-      ell(body, cx, 9.4, 3.5, 3.4, (x, y, u, v) => lit(u, v, false), { n: 2 });
-      ell(body, m ? N - 7.6 : 7.6, 9.8, 1.7, 1.6, 'p', { n: 2 });
-    };
-    ear(false); ear(true);
-    blob(body);
-    ell(body, 16, 21.4, 5.6, 4.4, (x, y, u, v) => (v > 0.45 ? 'c' : 'w'), { n: 2.2 });
-  } else if (sp === 'rabbit') {
-    // cotton tail low on the right
-    ell(tail, 27.8, 26.6, 3.6, 3.6, (x, y, u, v) => (lit(u, v, false) === 'b' || lit(u, v, false) === 'h' ? 'w' : 'c'), { n: 2 });
-    const ear = (m) => {
-      const cx = m ? N - 10.4 : 10.4;
-      const rot = m ? 10 : -10;
-      ell(body, cx, 5.4, 2.8, 8.0, (x, y, u, v) => lit(u, v, false), { rot, n: 2 });
-      ell(body, cx + (m ? -0.2 : 0.2), 6.0, 1.3, 5.6, 'p', { rot, n: 2 });
-    };
-    ear(false); ear(true);
-    blob(body);
-    ell(body, 16, 21.6, 5.4, 3.4, (x, y, u, v) => (v > 0.4 ? 'c' : 'w'), { n: 2.3 });
-  } else {
-    // owl: ear tufts, wing sides, round belly, big eye discs
-    hasTail = false;
-    face.eyeDisc = true;
-    face.beak = true;
-    face.cheeks = false;
-    const tuft = (m) => {
-      const P = (x, y) => [m ? N - x : x, y];
-      tri(body, [P(6.2, 3.4), P(5.4, 12.0), P(12.6, 9.6)], 'd');
-    };
-    tuft(false); tuft(true);
-    blob(body, 'y');
-    const wing = (m) => {
-      const cx = m ? N - 5.6 : 5.6;
-      ell(body, cx, 22.4, 2.4, 6.0, (x, y, u, v) => 'd', { rot: m ? -8 : 8, n: 2 });
-    };
-    wing(false); wing(true);
-    ell(body, 16, 26.0, 6.4, 4.6, (x, y, u, v) => (((x + y) & 1) === 0 && v < 0.1 ? 'c' : 'w'), { n: 2.3 });
-    ell(body, 11.0, 16.4, 3.9, 3.9, 'w', { n: 2 });
-    ell(body, 21.0, 16.4, 3.9, 3.9, 'w', { n: 2 });
+  } else if (kind === 'puff') {
+    ell(g, 27.4, 26.4, 3.4, 3.4, (x, y, u, v) => (lit(u, v, false) === 'b' ? 'w' : 'c'));
+  } else return false;
+  return true;
+}
+
+function partsOf(traits) {
+  const tail = blank();
+  const body = blank();
+  const over = blank();
+  const face = { eyeDisc: false, beak: false, cheeks: true };
+  earsOf(traits.ears, body, over, face);
+  ball(body);
+  if (face.eyeDisc) for (const [cx, cy] of EYE_C) ell(body, cx, cy, 3.9, 3.9, 'w');
+  if (traits.whiskers && !face.beak) {
+    for (const [x, y] of [[2, 20], [3, 21], [4, 21], [2, 24], [3, 23], [4, 23]]) { body[y][x] = 'W'; body[y][N - 1 - x] = 'W'; }
   }
-  return { tail: hasTail ? tail : null, body, face };
+  const hasTail = tailOf(traits.tail, tail);
+  return { tail: hasTail ? tail : null, body, over, face };
 }
 
 // ---------- accessories ----------
@@ -303,8 +313,8 @@ function bowtie() {
     for (let i = 0; i < 6; i++) {
       const ch = row[i];
       if (ch === '.') continue;
-      g[24 + j][10 + i] = ch;
-      g[24 + j][N - 1 - (10 + i)] = ch === 'g' ? 'k' : ch;
+      g[25 + j][10 + i] = ch;
+      g[25 + j][N - 1 - (10 + i)] = ch === 'g' ? 'k' : ch;
     }
   });
   return { over: g };
@@ -345,16 +355,23 @@ function hat() {
 
 function glasses() {
   const over = blank();
-  for (const cx of [11.0, 21.0]) {
+  for (const [cx, cy] of EYE_C) {
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
-        const d = Math.hypot(x + 0.5 - cx, y + 0.5 - 16.5);
-        if (d > 3.1 && d < 4.3) over[y][x] = 'K';
+        const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+        if (d > 3.3 && d < 4.4) over[y][x] = 'K';
       }
     }
   }
-  rect(over, 14, 16, 4, 1, 'K');
   return { over };
+}
+
+function flower() {
+  const g = blank();
+  const rows = ['.a.', 'aya', '.a.'];
+  rows.forEach((row, j) => { for (let i = 0; i < 3; i++) if (row[i] !== '.') g[7 + j][21 + i] = row[i]; });
+  g[10][21] = 'v';
+  return { top: g };
 }
 
 // ---------- sprite frames ----------
@@ -372,33 +389,30 @@ function eyePair(rows, lx, y) {
   return a.concat(b);
 }
 
-const EYE_Y = 15;
-const EYE_X = 10;
-
 function mouths(face) {
   const m = (rows, y, x = 14) => sprite(rows, x, y);
   if (face.beak) {
-    const top = sprite(['yy', 'yY'], 15, 19);
+    const top = sprite(['yy', 'yY'], 15, 21);
     return {
-      smile: top.concat(sprite(['Yy'], 15, 21)),
-      small: top.concat(sprite(['Yy'], 15, 21), sprite(['YY'], 15, 22)),
-      big: top.concat(sprite(['kk', 'tt', 'Yy'], 15, 21)),
-      flat: top.concat(sprite(['YY'], 15, 21)),
-      o: top.concat(sprite(['kk', 'kk', 'Yy'], 15, 21)),
+      smile: top.concat(sprite(['Yy'], 15, 23)),
+      small: top.concat(sprite(['Yy'], 15, 23), sprite(['YY'], 15, 24)),
+      big: top.concat(sprite(['kk', 'tt', 'Yy'], 15, 23)),
+      flat: top.concat(sprite(['YY'], 15, 23)),
+      o: top.concat(sprite(['kk', 'kk', 'Yy'], 15, 23)),
       none: [],
     };
   }
   return {
-    smile: m(['k..k', '.kk.'], 22),
-    small: m(['.kk.', '.kk.'], 22),
-    big: m(['kkkk', 'ktty', '.kk.'], 22).map(([x, y, k]) => [x, y, k === 'y' ? 't' : k]),
+    smile: m(['k..k', '.kk.'], 23),
+    small: m(['.kk.', '.kk.'], 23),
+    big: m(['kkkk', 'kttk', '.kk.'], 23),
     flat: m(['.kk.'], 23),
-    o: m(['.kk.', 'k..k', '.kk.'], 22),
+    o: m(['.kk.', 'kttk', '.kk.'], 23),
   };
 }
 
 function nose(face) {
-  return face.beak ? [] : sprite(['kk', 'kk'], 15, 19);
+  return face.beak ? [] : sprite(['kk', 'kk'], 15, 20);
 }
 
 // ---------- build ----------
@@ -440,43 +454,38 @@ const grp = (cls, px, pal) => `<g class="px-f ${cls}">${pathsOf(px, pal)}</g>`;
 function buildFrames(traits, pal, parts) {
   const { face } = parts;
   const LID = face.eyeDisc ? 'b' : null;
-  const eyeY = EYE_Y;
   const cover = (rows) => {
     // owl: lid colour painted over the white disc, from the top down
     if (!LID) return [];
     const px = [];
-    for (const cx of [11.0, 21.0]) {
+    for (const [cx, cy] of EYE_C) {
       for (let y = 0; y < N; y++) {
         for (let x = 0; x < N; x++) {
-          const d = Math.hypot(x + 0.5 - cx, y + 0.5 - 16.4);
-          if (d <= 3.9 && y < 12.5 + rows) px.push([x, y, LID]);
+          if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= 3.9 && y < 14.5 + rows) px.push([x, y, LID]);
         }
       }
     }
     return px;
   };
-  const open = eyePair(['Wk', 'kk', 'kk'], EYE_X, eyeY);
-  const mid = cover(3).concat(eyePair(['kk', 'kk'], EYE_X, eyeY + 1));
-  const closed = cover(7).concat(eyePair(['kk'], EYE_X, eyeY + 2));
-  const lineMid = cover(7).concat(eyePair(['kk'], EYE_X, eyeY + 1));
-  const up = eyePair(['Wk', 'kk', 'kk'], EYE_X + 1, eyeY - 1);
-  const wide = eyePair(['Wkk', 'kkk', 'kkk', 'kkk'], EYE_X - 1, eyeY - 1);
+  const CALM = ['.kkk.', 'kWWkk', 'kWWkk', 'kkkWk', '.kkk.'];
+  const open = eyePair(CALM, EYE_X, EYE_Y);
+  const mid = cover(3).concat(eyePair(['kkkkk', 'kkkWk', '.kkk.'], EYE_X, EYE_Y + 2));
+  const closed = cover(6).concat(eyePair(['.kkk.'], EYE_X, EYE_Y + 3));
+  const lineMid = cover(6).concat(eyePair(['kkkkk'], EYE_X, EYE_Y + 2));
+  const up = eyePair(CALM, EYE_X + 1, EYE_Y); // a side glance, same height, so the face keeps its proportions
+  const wide = eyePair(['.kkkk.', 'kWWkkk', 'kWWkkk', 'kkkkkk', 'kkkkWk', 'kkkikk', '.kkkk.'], EYE_X, EYE_Y - 2);
   const mo = mouths(face);
-  const browsUp = sprite(['ooo'], 9, 11).concat(sprite(['ooo'], 20, 11));
-  const browsThink = sprite(['ooo'], 9, 12).concat(sprite(['ooo'], 20, 11));
+  const browsUp = sprite(['ooo'], 10, 12).concat(sprite(['ooo'], 19, 12));
+  const browsThink = sprite(['ooo'], 10, 13).concat(sprite(['ooo'], 19, 12));
   const dots = [sprite(['ff', 'ff'], 28, 8), sprite(['ff', 'ff'], 29, 5), sprite(['ff', 'ff'], 28, 2)];
   const excl = sprite(['yy', 'yy', 'yy', 'yy', '..', 'yy'], 29, 1);
   const zs = [
     sprite(['fff', '..f', '.f.', 'fff'], 28, 7),
     sprite(['fff', '..f', '.f.', 'fff'], 28, 1),
   ];
-  const pawG = blank();
-  const pawKey = (x, y, u, v) => { const k = lit(u, v, false); return k === 'b' ? 'h' : k; };
-  ell(pawG, 23.2, 27.4, 2.6, 4.0, pawKey, { rot: -38, n: 2 });
-  ell(pawG, 19.8, 23.6, 3.0, 2.6, pawKey, { n: 2 });
-  const paw = gridPx(stack([pawG]));
-  const blush = face.cheeks ? sprite(['rr'], 7, 19).concat(sprite(['rr'], 23, 19)) : [];
-  const blushBig = face.cheeks ? sprite(['rrr'], 6, 19).concat(sprite(['rrr'], 23, 19)) : [];
+  const paw = [];
+  const blush = face.cheeks ? sprite(['rrr', 'rrr'], 6, 21).concat(sprite(['rrr', 'rrr'], 23, 21)) : [];
+  const blushBig = face.cheeks ? sprite(['rrrr', 'rrrr'], 5, 21).concat(sprite(['rrrr', 'rrrr'], 23, 21)) : [];
   return (
     grp('px-e-open', open, pal) + grp('px-e-mid', mid, pal) + grp('px-e-closed', closed, pal) + grp('px-e-line', lineMid, pal) +
     grp('px-e-up', up, pal) + grp('px-e-wide', wide, pal) +
@@ -491,15 +500,16 @@ function buildFrames(traits, pal, parts) {
   );
 }
 
-const accessoryOf = (name) => (name === 'bowtie' ? bowtie() : name === 'scarf' ? scarf() : name === 'ribbon' ? ribbon() : name === 'hat' ? hat() : name === 'glasses' ? glasses() : null);
+const ACCESSORY = { bowtie, scarf, ribbon, hat, glasses, flower };
+const accessoryOf = (name) => (ACCESSORY[name] ? ACCESSORY[name]() : null);
 
 function buildArt(traits) {
   const pal = paletteOf(traits.color, traits.accessoryColor);
-  const parts = speciesParts(traits.species);
+  const parts = partsOf(traits);
   const acc = accessoryOf(traits.accessory);
 
   const body = blank();
-  stack([parts.body], body);
+  stack([parts.body, parts.over], body);
   if (acc && acc.over) {
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
@@ -561,8 +571,6 @@ const CSS = `
 @keyframes px-d1{0%{visibility:hidden}16%{visibility:visible}100%{visibility:visible}}
 @keyframes px-d2{0%{visibility:hidden}38%{visibility:visible}100%{visibility:visible}}
 @keyframes px-d3{0%{visibility:hidden}60%{visibility:visible}92%{visibility:hidden}100%{visibility:hidden}}
-.px-m-thinking .px-all{animation:px-think 3.6s step-end infinite}
-@keyframes px-think{0%{transform:translate(0,0)}50%{transform:translate(0,1px)}75%{transform:translate(0,0)}}
 
 /* listening: soft attentive face, gentle nods */
 .px-m-listening .px-e-open{visibility:visible;animation:px-blink-open var(--px-blink,6s) step-end infinite var(--px-ph,0s)}

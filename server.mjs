@@ -37,6 +37,7 @@ const UI = {
 const fill = (s, v) => String(s).replace(/\{(\w+)\}/g, (_, k) => v[k] ?? '');
 const TASTES = ['pixel', 'flat', 'sticker', 'geo', 'meet'];
 const GRACE_MS = (CONFIG.leaveGraceSeconds ?? 10) * 1000;
+const MURMUR_MAX = CONFIG.murmurMaxChars ?? 30; // a murmur cuts into the human's talk, so it stays short
 // tmux-foxhound's pane delivery, found in whichever plugin marketplace has it installed
 const MARKETS = path.join(os.homedir(), '.claude/plugins/marketplaces');
 const PANE_MODULE = fs.readdirSync(MARKETS).map((m) => path.join(MARKETS, m, 'plugins/tmux-foxhound/skills/tmux-foxhound/scripts/foxhound-pane.mjs')).find((f) => fs.existsSync(f));
@@ -92,7 +93,6 @@ const roster = new Roster({
 // What each participant is doing right now, read from its Claude Code transcript (the "thought" balloon)
 const thoughts = createThoughts({ sessionsDir: path.join(os.homedir(), '.claude/sessions'), projectsDir: path.join(os.homedir(), '.claude/projects'), log });
 const thoughtText = new Map(); // name -> latest thought
-const voicedThought = new Map(); // name -> the thought text already spoken in a pause
 thoughts.on('thought', ({ name, text }) => { thoughtText.set(name, text); emit('thought', { name, text }); });
 
 // ---- Meeting state that lives outside the log: baton holders, interim turns, invites waiting for a yes, screen share ----
@@ -160,7 +160,7 @@ function emit(type, data) {
 }
 const snapshot = () => ({
   meeting: meeting.info(), list: meeting.list, ...rosterPayload(), ui: UI, lang: CONFIG.lang || 'en',
-  overlap: CONFIG.overlapSeconds ?? 1, holdMs: CONFIG.holdMs ?? 300, interimSeconds: CONFIG.interimSeconds ?? 15,
+  overlap: CONFIG.overlapSeconds ?? 0, holdMs: CONFIG.holdMs ?? 300, interimSeconds: CONFIG.interimSeconds ?? [15, 20, 25],
   tastes: TASTES, me: { owner: OWNER }, share, thoughts: Object.fromEntries(thoughtText),
 });
 setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 15000).unref();
@@ -326,18 +326,6 @@ const routes = {
     }
   },
   'POST /api/invite-decline': async (req, res) => { const { name } = await json(req); if (name) askedInvites.delete(name); else askedInvites.clear(); ok(res); },
-  // Speak a participant's latest thought in a pause of the human (once per thought text, half volume)
-  'POST /api/thought-voice': async (req, res) => {
-    const { name } = await json(req);
-    const p = roster.byName(name);
-    const text = thoughtText.get(name);
-    ok(res);
-    if (!p || !inMeeting(name) || !text || voicedThought.get(name) === text) return;
-    voicedThought.set(name, text);
-    const u = meeting.append(entry({ kind: 'murmur', from: name, text, thought: true, play: 'queued' }));
-    murmurIds.add(u.id);
-    speech.speak(u.id, forSpeech(text), p.voice, p.style);
-  },
   'GET /api/live': async (req, res) => sendRes(res, 200, roster.live().filter((s) => !inMeeting(s.name))),
   'POST /api/invite': async (req, res) => {
     const { name } = await json(req);
@@ -382,8 +370,9 @@ const routes = {
     if (!p || !inMeeting(p.name) || meeting.info().state === 'closed') return sendRes(res, 403, 'this pane is not a participant of the meeting', 'text/plain; charset=utf-8');
     const t = String(text || '').trim();
     if (!t) return sendRes(res, 400, 'nothing to say', 'text/plain; charset=utf-8');
-    awaiting.delete(p.name);
     const murmur = kind === 'murmur';
+    if (murmur && [...t].length > MURMUR_MAX) return sendRes(res, 400, `a murmur is at most ${MURMUR_MAX} characters (this one has ${[...t].length}); shorten it, or wait for the baton and speak`, 'text/plain; charset=utf-8');
+    awaiting.delete(p.name);
     const u = meeting.append(entry({ kind: murmur ? 'murmur' : 'say', from: p.name, text: t, play: 'queued' }));
     if (murmur) { murmurIds.add(u.id); emit('murmur', { name: p.name, id: u.id, text: t }); }
     speech.speak(u.id, forSpeech(t), p.voice, p.style);
