@@ -115,7 +115,10 @@ const talk = createTalk({
   onPress: () => post('/api/press', player.stopAll(), { quiet: true }), // barge-in: stop the voices and tell the server what was cut
   onSend: sendRecording,
   onCancel: () => post('/api/cancel', {}, { quiet: true }),
-  onLevel: (level) => bar && typeof bar.setLevel === 'function' && bar.setLevel(level),
+  onLevel: (level) => {
+    player.setInputLevel(level);
+    if (bar && typeof bar.setLevel === 'function') bar.setLevel(level);
+  },
 });
 talk.onChange((state, error) => {
   player.hold(state !== 'idle'); // no AI voice while the microphone is open

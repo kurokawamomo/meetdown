@@ -6,10 +6,12 @@
 // Murmurs (audio with murmur: true) play on their own track at 50% gain, one at a time. One voice at a time,
 // by rule and not by anyone's judgement: while the human records nothing plays (a murmur that is sounding is
 // cut), a murmur starts only while no normal voice is audible, and a normal voice waits for a sounding murmur.
+// The one exception: a short murmur (SHORT_MURMUR characters at most) may sound over the human, and it gets quieter
+// while the human is loud (setInputLevel).
 // Text for the balloons: onSentence(from, text, id) when a sentence of normal speech starts, onClear(from, id)
 // when the utterance ends or is cut, onMurmur(id, from, text) when a murmur sentence starts.
 //
-// Beyond the contract: hold(on) and reset(). `overlap` may be a number or a function returning one.
+// Beyond the contract: hold(on), setInputLevel(0..1) and reset(). `overlap` may be a number or a function returning one.
 // onPlay(id, from) fires when the first sentence of an utterance becomes audible (not when it is queued),
 // onDone(id) when its last sentence has finished, onSpeaking(names) whenever the set of audible
 // speakers changes (two speakers are audible while their voices overlap; the newest is last).
@@ -17,6 +19,9 @@
 const TICK_MS = 50;
 const FETCH_TIMEOUT_MS = 15000;
 const MURMUR_GAIN = 0.5;
+const SHORT_MURMUR = 10; // characters
+const LOUD_INPUT = 0.35; // input level above which a murmur over the human is ducked
+const DUCKED_GAIN = 0.2;
 const HEARD_IN_PART_SEC = 10; // a half-heard utterance still counts as "playing" this long after a sentence ended
 
 export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSentence, onClear, onMurmur, env = {} } = {}) {
@@ -229,7 +234,10 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
   }
 
   // ---- Murmurs ----
-  const murmurAllowed = () => !held;
+  const isShort = (m) => [...(m.text || '')].length <= SHORT_MURMUR;
+  const murmurAllowed = (m) => !held || isShort(m);
+  let inputLevel = 0;
+  const murmurGain = () => (held && inputLevel > LOUD_INPUT ? DUCKED_GAIN : MURMUR_GAIN);
 
   function enqueueMurmur(a) {
     const ctrl = new AbortController();
@@ -242,7 +250,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     if (mpumping || !ctx) return;
     mpumping = true;
     try {
-      while (mwaiting.length && !mplaying && murmurAllowed()) {
+      while (mwaiting.length && !mplaying && murmurAllowed(mwaiting[0])) {
         const m = mwaiting[0];
         if (!m.loaded) {
           const raw = await m.raw;
@@ -250,7 +258,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
           m.loaded = true;
         }
         if (mwaiting[0] !== m) continue;
-        if (!murmurAllowed() || items.length) break; // a normal voice is sounding or scheduled; tick() tries again
+        if (!murmurAllowed(m) || items.length) break; // a normal voice is sounding or scheduled; tick() tries again
         mwaiting.shift();
         if (silenced.has(m.id) || !m.audio) continue;
         playMurmur(m);
@@ -263,11 +271,11 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
   function playMurmur(m) {
     const src = ctx.createBufferSource();
     const gain = ctx.createGain();
-    gain.gain.value = MURMUR_GAIN;
+    gain.gain.value = murmurGain();
     src.buffer = m.audio;
     src.connect(gain);
     gain.connect(ctx.destination);
-    mplaying = { src, gain };
+    mplaying = { src, gain, short: isShort(m) };
     src.onended = () => {
       try { src.disconnect(); gain.disconnect(); } catch (_) {}
       if (mplaying && mplaying.src === src) mplaying = null;
@@ -280,10 +288,16 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     call(onMurmur, m.id, m.from, m.text);
   }
 
+  // The human's input level (0..1): a murmur sounding over the human is ducked while the human is loud
+  function setInputLevel(level) {
+    inputLevel = Number(level) || 0;
+    if (mplaying && ctx) mplaying.gain.gain.setTargetAtTime(murmurGain(), ctx.currentTime, 0.05);
+  }
+
   // Block (true) or allow (false) putting new sentences on the timeline; arrivals still download
   function hold(on) {
     held = !!on;
-    if (held && mplaying) { // the human speaks: a sounding murmur stops at once
+    if (held && mplaying && !mplaying.short) { // the human speaks: a sounding murmur stops at once (a short one may go on)
       const { src, gain } = mplaying;
       mplaying = null;
       src.onended = null;
@@ -299,5 +313,5 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     silenced.clear();
   }
 
-  return { unlock, enqueue, stopAll, speakingFrom, silence, hold, reset };
+  return { unlock, enqueue, stopAll, speakingFrom, silence, hold, setInputLevel, reset };
 }
