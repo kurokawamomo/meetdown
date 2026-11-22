@@ -86,7 +86,24 @@ const roster = new Roster({
 // What each participant is doing right now, read from its Claude Code transcript (the "thought" balloon)
 const thoughts = createThoughts({ sessionsDir: path.join(os.homedir(), '.claude/sessions'), projectsDir: path.join(os.homedir(), '.claude/projects'), log });
 const thoughtText = new Map(); // name -> latest thought
-thoughts.on('thought', ({ name, text }) => { thoughtText.set(name, text); emit('thought', { name, text }); });
+// A new thought is also voiced, very short and quiet (the page plays it at low volume and fades it out), at most
+// once per THOUGHT_VOICE_GAP_MS per participant; thoughtVoice: false in config.json turns it off
+const THOUGHT_VOICE_CHARS = 20;
+const THOUGHT_VOICE_GAP_MS = 10000;
+const thoughtVoicedAt = new Map(); // name -> time
+thoughts.on('thought', ({ name, text }) => {
+  thoughtText.set(name, text);
+  emit('thought', { name, text });
+  const p = roster.byName(name);
+  if (CONFIG.thoughtVoice === false || !text || !p || !inMeeting(name) || meeting.info().state !== 'open') return;
+  if (Date.now() - (thoughtVoicedAt.get(name) || 0) < THOUGHT_VOICE_GAP_MS) return;
+  thoughtVoicedAt.set(name, Date.now());
+  const said = [...text].slice(0, THOUGHT_VOICE_CHARS).join('');
+  const u = meeting.append(entry({ kind: 'murmur', from: name, text: said, thought: true, play: 'queued' }));
+  murmurIds.add(u.id);
+  thoughtIds.add(u.id);
+  speech.speak(u.id, forSpeech(said), p.voice, p.style);
+});
 
 // ---- Meeting state that lives outside the log: baton holders, interim turns, invites waiting for a yes, screen share ----
 let meeting = null;
@@ -108,6 +125,7 @@ const askedInvites = new Set();
 let share = null;
 let shareVersion = 0;
 const murmurIds = new Set(); // utterance ids spoken at half volume
+const thoughtIds = new Set(); // murmurs that voice a thought: quieter, fading, allowed over the human
 const awaiting = new Map(); // name -> { since: id, sawBusy: boolean }
 
 const chairName = () => (roster.participants().find((p) => p.chair) || {}).name || null;
@@ -144,6 +162,7 @@ function openMeeting() {
   askedInvites.clear();
   share = null;
   murmurIds.clear();
+  thoughtIds.clear();
   awaiting.clear();
   roster.poll();
   roster.reset(CONFIG.autoJoin || []);
@@ -257,7 +276,7 @@ const stillToHear = (u) => u && (u.play === 'queued' || u.play === 'playing');
 speech.on('audio', (m) => {
   const u = meeting.list.find((x) => x.id === m.id);
   if (stillToHear(u)) {
-    const a = { id: m.id, seq: m.seq, url: '/audio/' + m.file, gap: m.gap, last: m.last, from: u.from, text: m.text || '', murmur: murmurIds.has(m.id) };
+    const a = { id: m.id, seq: m.seq, url: '/audio/' + m.file, gap: m.gap, last: m.last, from: u.from, text: m.text || '', murmur: murmurIds.has(m.id), thought: thoughtIds.has(m.id) };
     if (!unheard.has(m.id)) unheard.set(m.id, []);
     unheard.get(m.id).push(a);
     emit('audio', a);

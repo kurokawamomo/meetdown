@@ -15,7 +15,8 @@ const TRANSCRIBING_MS = 15000; // "transcribing" stays until the answer arrives,
 const store = createStore('/events'); // store.state.connected is false while the stream is down; the bar shows that itself
 const ui = () => store.state.ui;
 let bar = null;
-let stage = null; // created below; the player and the event handlers reach it late
+let stage = null;
+let captions = null; // created below; the player and the event handlers reach it late
 
 // Local messages go through the bar's toast, which also shows the server's 'note' events
 const say = (text, ms) => {
@@ -50,7 +51,10 @@ const player = createPlayer({
   onPlay: (id) => post('/api/play', { id, state: 'playing' }, { quiet: true }),
   onDone: (id) => post('/api/play', { id, state: 'done' }, { quiet: true }),
   onSpeaking: (names) => store.patch({ speaking: names }), // the stage shows these names as speaking
-  onSentence: (from, text) => stage && stage.showSpeech(from, text),
+  onSentence: (from, text) => {
+    if (stage) stage.showSpeech(from, text);
+    if (captions) captions.sentence(from, text);
+  },
   onClear: (from) => stage && stage.clearSpeech(from),
   onMurmur: (id, from, text) => stage && stage.showMurmur(from, text),
 });
@@ -168,4 +172,4 @@ bar = safely('bar', () => createBar(mount('bar'), {
   onBack: () => post('/api/back', {}),
 }));
 safely('panel', () => createPanel(mount('panel'), { store }));
-safely('captions', () => createCaptions(mount('captions'), { store }));
+captions = safely('captions', () => createCaptions(mount('captions'), { store }));

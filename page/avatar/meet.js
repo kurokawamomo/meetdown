@@ -51,6 +51,11 @@ export function distinctLetters(participants = []) {
   return out;
 }
 
+// The circle colour of a participant: look.color when it is a #rrggbb, else one of Meet's colours picked by the name
+export function colorOf(seed, look = {}) {
+  return /^#[0-9a-f]{6}$/i.test((look && look.color) || '') ? look.color : COLORS[hash32('mt|' + String(seed)) % COLORS.length];
+}
+
 export function initialOf(text) {
   const first = Array.from(String(text || '').trim())[0] || '?';
   return first.toLocaleUpperCase();
@@ -121,7 +126,7 @@ function build({ color, ink, letter, label, image, clip }) {
 export function create({ seed = '', look = {}, label } = {}) {
   ensureStyle();
   const l = look || {};
-  const color = /^#[0-9a-f]{6}$/i.test(l.color || '') ? l.color : COLORS[hash32('mt|' + String(seed)) % COLORS.length];
+  const color = colorOf(seed, l);
   const tpl = document.createElement('template');
   const image = /^\/avatar-image\/[0-9a-f]{12}\.[a-z]+$/.test(l.imageUrl || '') ? l.imageUrl : '';
   tpl.innerHTML = build({ color, ink: inkFor(color), letter: l.letter || initialOf(label || seed), label: esc(label || seed || 'avatar'), image, clip: 'mt-clip-' + hash32('clip|' + String(seed)).toString(36) });

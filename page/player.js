@@ -6,8 +6,9 @@
 // Murmurs (audio with murmur: true) play on their own track at 50% gain, one at a time. One voice at a time,
 // by rule and not by anyone's judgement: while the human records nothing plays (a murmur that is sounding is
 // cut), a murmur starts only while no normal voice is audible, and a normal voice waits for a sounding murmur.
-// The one exception: a short murmur (SHORT_MURMUR characters at most) may sound over the human, and it gets quieter
-// while the human is loud (setInputLevel).
+// The exceptions: a short murmur (SHORT_MURMUR characters at most) and a voiced thought (thought: true) may sound over
+// the human, quieter while the human is loud (setInputLevel). A voiced thought is quieter still and fades out in its
+// second half, so it is heard as someone about to speak.
 // Text for the balloons: onSentence(from, text, id) when a sentence of normal speech starts, onClear(from, id)
 // when the utterance ends or is cut, onMurmur(id, from, text) when a murmur sentence starts.
 //
@@ -22,6 +23,7 @@ const MURMUR_GAIN = 0.5;
 const SHORT_MURMUR = 10; // characters
 const LOUD_INPUT = 0.35; // input level above which a murmur over the human is ducked
 const DUCKED_GAIN = 0.2;
+const THOUGHT_GAIN = 0.3;
 const HEARD_IN_PART_SEC = 10; // a half-heard utterance still counts as "playing" this long after a sentence ended
 
 export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSentence, onClear, onMurmur, env = {} } = {}) {
@@ -234,14 +236,14 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
   }
 
   // ---- Murmurs ----
-  const isShort = (m) => [...(m.text || '')].length <= SHORT_MURMUR;
+  const isShort = (m) => m.thought || [...(m.text || '')].length <= SHORT_MURMUR;
   const murmurAllowed = (m) => !held || isShort(m);
   let inputLevel = 0;
-  const murmurGain = () => (held && inputLevel > LOUD_INPUT ? DUCKED_GAIN : MURMUR_GAIN);
+  const murmurGain = (thought) => Math.min(thought ? THOUGHT_GAIN : MURMUR_GAIN, held && inputLevel > LOUD_INPUT ? DUCKED_GAIN : 1);
 
   function enqueueMurmur(a) {
     const ctrl = new AbortController();
-    const m = { id: a.id, seq: a.seq, from: a.from, text: a.text || '', ctrl, raw: fetchRaw(a.url, ctrl), loaded: false, audio: null };
+    const m = { id: a.id, seq: a.seq, from: a.from, text: a.text || '', thought: !!a.thought, ctrl, raw: fetchRaw(a.url, ctrl), loaded: false, audio: null };
     mwaiting.push(m);
     pumpMurmurs();
   }
@@ -271,11 +273,16 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
   function playMurmur(m) {
     const src = ctx.createBufferSource();
     const gain = ctx.createGain();
-    gain.gain.value = murmurGain();
+    gain.gain.value = murmurGain(m.thought);
+    if (m.thought) { // full for the first half, then fading to silence
+      const half = ctx.currentTime + m.audio.duration / 2;
+      gain.gain.setValueAtTime(gain.gain.value, half);
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + m.audio.duration);
+    }
     src.buffer = m.audio;
     src.connect(gain);
     gain.connect(ctx.destination);
-    mplaying = { src, gain, short: isShort(m) };
+    mplaying = { src, gain, short: isShort(m), thought: m.thought };
     src.onended = () => {
       try { src.disconnect(); gain.disconnect(); } catch (_) {}
       if (mplaying && mplaying.src === src) mplaying = null;
@@ -285,13 +292,13 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     };
     src.start();
     if (!timer) timer = every(tick, TICK_MS);
-    call(onMurmur, m.id, m.from, m.text);
+    if (!m.thought) call(onMurmur, m.id, m.from, m.text); // a thought already shows in its own balloon
   }
 
   // The human's input level (0..1): a murmur sounding over the human is ducked while the human is loud
   function setInputLevel(level) {
     inputLevel = Number(level) || 0;
-    if (mplaying && ctx) mplaying.gain.gain.setTargetAtTime(murmurGain(), ctx.currentTime, 0.05);
+    if (mplaying && ctx && !mplaying.thought) mplaying.gain.gain.setTargetAtTime(murmurGain(false), ctx.currentTime, 0.05); // a thought keeps its fade
   }
 
   // Block (true) or allow (false) putting new sentences on the timeline; arrivals still download
