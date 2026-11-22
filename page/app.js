@@ -53,7 +53,13 @@ const player = createPlayer({
   onClear: (from) => stage && stage.clearSpeech(from),
   onMurmur: (id, from, text) => stage && stage.showMurmur(from, text),
 });
-store.on('audio', (a) => player.enqueue(a));
+const queuedAudio = new Set(); // id/seq of sentences this page already has; a reconnect replays the unheard ones
+store.on('audio', (a) => {
+  const key = a && `${a.id}/${a.seq}`;
+  if (!a || queuedAudio.has(key)) return;
+  queuedAudio.add(key);
+  player.enqueue(a);
+});
 store.on('stop', () => player.stopAll());
 
 // ---- Thoughts and murmurs ----
@@ -125,7 +131,7 @@ let meetingId = null;
 store.on('snapshot', () => {
   const id = store.state.meeting && store.state.meeting.id;
   if (id !== meetingId) {
-    if (meetingId !== null) player.reset(); // a new meeting restarts utterance ids
+    if (meetingId !== null) { player.reset(); queuedAudio.clear(); } // a new meeting restarts utterance ids
     meetingId = id;
   }
 });

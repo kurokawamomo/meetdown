@@ -98,6 +98,7 @@ thoughts.on('thought', ({ name, text }) => { thoughtText.set(name, text); emit('
 // ---- Meeting state that lives outside the log: baton holders, interim turns, invites waiting for a yes, screen share ----
 let meeting = null;
 let baton = [];
+const unheard = new Map(); // utterance id -> audio events
 const turns = new Map(); // turn id -> { parts: Map(part -> text), u: live interim utterance }
 const askedInvites = new Set();
 let share = null;
@@ -122,6 +123,7 @@ function openMeeting() {
   meeting.on('state', (info) => emit('meeting', info));
   meeting.on('expire', () => endMeeting().catch((e) => log('end', e.stack || e.message)));
   baton = [];
+  unheard.clear();
   turns.clear();
   askedInvites.clear();
   share = null;
@@ -234,12 +236,23 @@ const SPACE_NEAR_JA = new RegExp(`(?<=[${JA}])[ \\t]+|[ \\t]+(?=[${JA}])`, 'g');
 const forSpeech = (text) => text.replace(SPACE_NEAR_JA, '');
 
 // ---- Speech output ----
+// Sentences of utterances that are not heard to the end yet, so a reloaded page can play them again
+const stillToHear = (u) => u && (u.play === 'queued' || u.play === 'playing');
 speech.on('audio', (m) => {
   const u = meeting.list.find((x) => x.id === m.id);
-  if (u && (u.play === 'queued' || u.play === 'playing')) {
-    emit('audio', { id: m.id, seq: m.seq, url: '/audio/' + m.file, gap: m.gap, last: m.last, from: u.from, text: m.text || '', murmur: murmurIds.has(m.id) });
+  if (stillToHear(u)) {
+    const a = { id: m.id, seq: m.seq, url: '/audio/' + m.file, gap: m.gap, last: m.last, from: u.from, text: m.text || '', murmur: murmurIds.has(m.id) };
+    if (!unheard.has(m.id)) unheard.set(m.id, []);
+    unheard.get(m.id).push(a);
+    emit('audio', a);
   }
 });
+function replayUnheard(res) {
+  for (const [id, list] of unheard) {
+    if (!stillToHear(meeting.list.find((x) => x.id === id))) { unheard.delete(id); continue; }
+    for (const a of list) res.write(`event: audio\ndata: ${JSON.stringify(a)}\n\n`);
+  }
+}
 speech.on('error', (m) => {
   const u = meeting.list.find((x) => x.id === m.id);
   log('tts error', m.id, m.error);
@@ -437,6 +450,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/events') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
       res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot())}\n\n`);
+      replayUnheard(res); // after a reload, what was not heard to the end plays again (the page skips sentences it already has)
       clients.add(res);
       req.on('close', () => clients.delete(res));
       return;
