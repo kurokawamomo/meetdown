@@ -23,7 +23,7 @@ const MURMUR_GAIN = 0.5;
 const SHORT_MURMUR = 10; // characters
 const LOUD_INPUT = 0.35; // input level above which a murmur over the human is ducked
 const DUCKED_GAIN = 0.2;
-const THOUGHT_GAIN = 0.3;
+const THOUGHT_GAIN = 0.15;
 const HEARD_IN_PART_SEC = 10; // a half-heard utterance still counts as "playing" this long after a sentence ended
 
 export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSentence, onClear, onMurmur, env = {} } = {}) {
@@ -274,11 +274,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     const src = ctx.createBufferSource();
     const gain = ctx.createGain();
     gain.gain.value = murmurGain(m.thought);
-    if (m.thought) { // full for the first quarter, silent by 60%
-      const d = m.audio.duration;
-      gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime + d * 0.25);
-      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + d * 0.6);
-    }
+    if (m.thought) gain.gain.linearRampToValueAtTime(0, ctx.currentTime + m.audio.duration * 0.5); // quiet from the start, gone by the middle
     src.buffer = m.audio;
     src.connect(gain);
     gain.connect(ctx.destination);
