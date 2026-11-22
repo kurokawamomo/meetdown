@@ -308,9 +308,11 @@ speech.on('audio', (m) => {
     emit('audio', a);
   }
 });
+const REPLAY_WINDOW_MS = 60000; // only what was said in the last minute comes back after a reload
 function replayUnheard(res) {
   for (const [id, list] of unheard) {
-    if (!stillToHear(meeting.list.find((x) => x.id === id))) { unheard.delete(id); continue; }
+    const u = meeting.list.find((x) => x.id === id);
+    if (!stillToHear(u) || Date.now() - Date.parse(u.at) > REPLAY_WINDOW_MS) { unheard.delete(id); continue; }
     for (const a of list) res.write(`event: audio\ndata: ${JSON.stringify(a)}\n\n`);
   }
 }
