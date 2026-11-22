@@ -169,10 +169,10 @@ export function createStage(root, { store, onDismiss, onShareClose, avatarFor, t
     rec.avatar = null;
   }
 
-  // avatarFor is called once per participant and kept; it is called again only when the taste or look changes
+  // avatarFor is called once per participant and kept; it is called again only when the look changes
   function mountAvatar(rec, p, letter) {
     if (letter && !(p.look && p.look.letter)) p = { ...p, look: { ...(p.look || {}), letter } };
-    const key = (p.taste || '') + '|' + JSON.stringify(p.look || {});
+    const key = JSON.stringify(p.look || {});
     if (rec.avatarKey === key) return;
     rec.avatarKey = key;
     dropAvatar(rec);
@@ -290,7 +290,6 @@ export function createStage(root, { store, onDismiss, onShareClose, avatarFor, t
     setText(rec, 'chair', rec.chairEl, p.chair ? t('chair') : '');
     setText(rec, 'sub', rec.subEl, sub);
     setAttr(rec, 'aria', rec.el, 'aria-label', sub ? `${label}, ${sub}` : label);
-    setAttr(rec, 'taste', rec.el, 'data-taste', p.taste || '');
     setAttr(rec, 'baton-tip', rec.baton, 'title', t('baton'));
     setFlag(rec, 'is-baton', holds);
     setFlag(rec, 'is-speaking', ctx.speaking.has(p.name));

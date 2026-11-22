@@ -162,6 +162,5 @@ bar = safely('bar', () => createBar(mount('bar'), {
   onInvite: (name) => post('/api/invite', { name }),
   onLeave: () => post('/api/leave', {}),
   onBack: () => post('/api/back', {}),
-  onTaste: (taste, name = '*') => post('/api/taste', { name, taste }),
 }));
 safely('panel', () => createPanel(mount('panel'), { store }));

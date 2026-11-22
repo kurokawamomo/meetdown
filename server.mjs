@@ -26,7 +26,6 @@ const UI = {
   sendError: 'Could not send: ', reconnecting: 'Disconnected. Reconnecting...',
   paneMissing: 'Could not find the pane of {name}', gaveUp: 'Could not deliver to {name} ({why})',
   invite: 'Add people', inviteTitle: 'Add a session', noOneToInvite: 'No session to add', more: 'More',
-  taste: 'Avatar style', tastePixel: 'Pixel', tasteFlat: 'Flat', tasteSticker: 'Sticker', tasteGeo: 'Geometric', tasteMeet: 'Meet circles',
   leave: 'Leave', leaving: 'Ending the meeting in {seconds} s', back: 'Back', ended: 'The meeting has ended',
   summary: 'Summary', summaryFailed: 'Could not summarize', dismiss: 'Remove', minutes: 'Minutes', joined: 'joined', left: 'left',
   baton: 'Baton', inviteAsk: 'Invite {name}?', inviteYes: 'Invite', inviteNo: 'Not now', dismissConfirm: 'Remove {name} from the meeting?',
@@ -35,7 +34,6 @@ const UI = {
   ...(CONFIG.ui || {}),
 };
 const fill = (s, v) => String(s).replace(/\{(\w+)\}/g, (_, k) => v[k] ?? '');
-const TASTES = ['pixel', 'flat', 'sticker', 'geo', 'meet'];
 const GRACE_MS = (CONFIG.leaveGraceSeconds ?? 10) * 1000;
 const MURMUR_MAX = CONFIG.murmurMaxChars ?? 30; // a murmur cuts into the human's talk, so it stays short
 // tmux-foxhound's pane delivery, found in whichever plugin marketplace has it installed
@@ -46,7 +44,6 @@ const STATE = path.join(ROOT, 'state');
 const AUDIO = path.join(STATE, 'audio');
 const MEETINGS = path.join(ROOT, 'meetings');
 const PAGE_DIR = path.join(ROOT, 'page');
-const PREFS = path.join(STATE, 'prefs.json');
 const SHARES = path.join(STATE, 'share');
 const SAY = path.join(ROOT, 'bin/meet-say').replace(os.homedir(), '~');
 fs.mkdirSync(STATE, { recursive: true });
@@ -67,9 +64,6 @@ const TOKEN = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
 const same = (a) => typeof a === 'string' && a.length === TOKEN.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(TOKEN));
 const cookieToken = (req) => ((req.headers.cookie || '').match(/(?:^|;\s*)meetdown=([^;]+)/) || [])[1];
 
-// Avatar taste choices survive restarts
-const prefs = (() => { try { return { tastes: {}, ...JSON.parse(fs.readFileSync(PREFS, 'utf8')) }; } catch (_) { return { tastes: {} }; } })();
-const savePrefs = () => fs.writeFileSync(PREFS, JSON.stringify(prefs, null, 2));
 
 // ---- Parts ----
 const { sendToPane } = await import(pathToFileURL(PANE_MODULE).href);
@@ -88,7 +82,6 @@ const roster = new Roster({
   sessionsDir: path.join(os.homedir(), '.claude/sessions'),
   people: CONFIG.people || {},
   voicePool: CONFIG.voicePool || [],
-  defaultTaste: prefs.defaultTaste || CONFIG.defaultTaste || 'pixel',
 });
 // What each participant is doing right now, read from its Claude Code transcript (the "thought" balloon)
 const thoughts = createThoughts({ sessionsDir: path.join(os.homedir(), '.claude/sessions'), projectsDir: path.join(os.homedir(), '.claude/projects'), log });
@@ -109,7 +102,6 @@ const awaiting = new Map(); // name -> { since: id, sawBusy: boolean }
 const chairName = () => (roster.participants().find((p) => p.chair) || {}).name || null;
 const inMeeting = (name) => roster.participants().some((p) => p.name === name);
 const labelOf = (name) => (roster.byName(name) || {}).label || name;
-const tasteOf = (p) => prefs.tastes[p.name] || prefs.defaultTaste || p.taste || CONFIG.defaultTaste || 'pixel';
 // look.image is a local file path in config.json: the page only gets an opaque url for it
 const AVATAR_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 const avatarImages = new Map(); // url id -> file path
@@ -122,7 +114,7 @@ function publicLook(look = {}) {
   avatarImages.set(id, file);
   return { ...rest, imageUrl: '/avatar-image/' + id };
 }
-const publicParticipant = (p) => ({ name: p.name, label: p.label, status: p.status, chair: !!p.chair, taste: tasteOf(p), look: publicLook(p.look || {}), address: p.address, title: p.title });
+const publicParticipant = (p) => ({ name: p.name, label: p.label, status: p.status, chair: !!p.chair, look: publicLook(p.look || {}), address: p.address, title: p.title });
 const rosterPayload = () => ({ participants: roster.participants().map(publicParticipant), baton });
 const emitRoster = () => { emit('roster', rosterPayload()); emit('baton', { holders: baton }); };
 const watchThoughts = () => thoughts.watch(roster.participants().map((p) => p.name));
@@ -175,7 +167,7 @@ function emit(type, data) {
 const snapshot = () => ({
   meeting: meeting.info(), list: meeting.list, ...rosterPayload(), ui: UI, lang: CONFIG.lang || 'en',
   overlap: CONFIG.overlapSeconds ?? 0, holdMs: CONFIG.holdMs ?? 300, interimSeconds: CONFIG.interimSeconds ?? [15, 20, 25], autoEnd: CONFIG.autoEnd ?? { afterSeconds: 15, quietSeconds: 5 },
-  tastes: TASTES, me: { owner: OWNER }, share, thoughts: Object.fromEntries(thoughtText),
+  me: { owner: OWNER }, share, thoughts: Object.fromEntries(thoughtText),
 });
 setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 15000).unref();
 
@@ -379,15 +371,6 @@ const routes = {
   },
   'POST /api/leave': async (req, res) => { if (meeting.info().state === 'open') meeting.leave(GRACE_MS); ok(res); },
   'POST /api/back': async (req, res) => { if (meeting.info().state === 'leaving') meeting.back(); ok(res); },
-  'POST /api/taste': async (req, res) => {
-    const { name, taste } = await json(req);
-    if (TASTES.includes(taste)) {
-      if (name === '*') { prefs.defaultTaste = taste; prefs.tastes = {}; } else prefs.tastes[name] = taste;
-      savePrefs();
-      emitRoster();
-    }
-    ok(res);
-  },
   // From an AI pane (meet-say): speak (big balloon) or murmur (small balloon, half volume); optionally pass the baton
   'POST /api/say': async (req, res) => {
     const { pane, text, pass, kind } = await json(req);

@@ -29,7 +29,6 @@ const serverDefaults = () => ({
   lang: 'en',
   overlap: 0,
   holdMs: 300,
-  tastes: null,
   me: { owner: '' },
   summary: null,
 });

@@ -27,11 +27,9 @@
       "voice": "<VOICEVOX speaker name>",
       "style": "<VOICEVOX style name>",
       "chair": true,
-      "taste": "pixel",
       "look": {
-        "species": "fox",
-        "color": "#f2a7a3",
-        "accessory": "bowtie"
+        "letter": "<one letter, optional>",
+        "image": "<path to a png or jpg, optional>"
       }
     }
   },
@@ -41,7 +39,6 @@
       "style": "<style name>"
     }
   ],
-  "defaultTaste": "pixel",
   "shareMinutes": 2,
   "leaveGraceSeconds": 10,
   "holdMs": 300,
@@ -50,7 +47,14 @@
   "dryDeliver": false,
   "ui": {},
   "speechSpeed": 1.0,
-  "interimSeconds": [15, 20, 25],
+  "interimSeconds": [
+    15,
+    20,
+    25
+  ],
   "murmurMaxChars": 30,
-  "autoEnd": { "afterSeconds": 15, "quietSeconds": 5 }
+  "autoEnd": {
+    "afterSeconds": 15,
+    "quietSeconds": 5
+  }
 }

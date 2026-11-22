@@ -1,12 +1,11 @@
-// bar.js: the bottom bar (clock, mic, chat input, invite, more, leave, minutes toggle) and the layers it opens:
-// invite dialog, avatar-style menu, leave countdown, toast. All text comes from store.state.ui.
+// bar.js: the bottom bar (clock, mic, chat input, invite, leave, minutes toggle) and the layers it opens:
+// invite dialog, leave countdown, toast. All text comes from store.state.ui.
 
 const ICON = {
   mic: '<path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>',
   micOff: '<path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3 3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/>',
   send: '<path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"/>',
   personAdd: '<path d="M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>',
-  more: '<path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>',
   chat: '<path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z"/>',
   callEnd: '<path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.73-1.68-1.36-2.66-1.85-.33-.16-.56-.51-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/>',
   close: '<path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>',
@@ -19,7 +18,7 @@ const RING = 339.3; // circumference of the countdown ring (r = 54)
 const GRACE_FALLBACK_MS = 10000;
 const FALLBACK_TASTES = ['pixel', 'meet'];
 // ui keys this module renders; a changed value anywhere in this list re-applies the texts
-const UI_KEYS = ['talk', 'placeholder', 'send', 'invite', 'inviteTitle', 'more', 'taste', 'leave', 'back', 'summary', 'minutes', 'holding', 'toggled', 'inviteAsk', 'inviteYes', 'inviteNo'];
+const UI_KEYS = ['talk', 'placeholder', 'send', 'invite', 'inviteTitle', 'leave', 'back', 'summary', 'minutes', 'holding', 'toggled', 'inviteAsk', 'inviteYes', 'inviteNo'];
 
 function el(tag, cls, html) {
   const e = document.createElement(tag);
@@ -40,7 +39,7 @@ const hueOf = (s) => {
 const fill = (s, vars) => String(s).replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '');
 const pad2 = (n) => String(n).padStart(2, '0');
 
-export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack, onTaste, fetchLive } = {}) {
+export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack, fetchLive } = {}) {
   root.classList.add('bar');
   const overlays = document.getElementById('overlays') || document.body;
   const canHover = typeof matchMedia === 'function' && matchMedia('(hover: hover)').matches;
@@ -83,11 +82,9 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
   form.append(input, sendBtn);
 
   const inviteBtn = button('btn btn-invite', icon('personAdd'));
-  const moreBtn = button('btn btn-more', icon('more'));
-  moreBtn.setAttribute('aria-haspopup', 'menu');
-  const leaveBtn = button('leave', icon('callEnd'));
+      const leaveBtn = button('leave', icon('callEnd'));
   const center = el('div', 'bar-center');
-  center.append(micWrap, form, inviteBtn, moreBtn, leaveBtn);
+  center.append(micWrap, form, inviteBtn, leaveBtn);
 
   const panelBtn = button('btn ghost btn-panel', icon('chat'));
   panelBtn.setAttribute('aria-pressed', 'false');
@@ -121,10 +118,6 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
   const scrim = el('div', 'dialog-scrim');
   scrim.append(dialog);
 
-  // ---- avatar-style menu ----
-  const menu = el('div', 'menu');
-  menu.setAttribute('role', 'menu');
-
   // ---- leave overlay: countdown while leaving, then ended and the summary ----
   const ring = el('div', 'ring', '<svg viewBox="0 0 120 120" aria-hidden="true"><circle class="ring-track" cx="60" cy="60" r="54"></circle><circle class="ring-fill" cx="60" cy="60" r="54"></circle></svg>');
   const ringArc = ring.querySelector('.ring-fill');
@@ -141,7 +134,7 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
   leaveOv.setAttribute('role', 'alertdialog');
   leaveOv.append(card);
 
-  overlays.append(scrim, menu, leaveOv);
+  overlays.append(scrim, leaveOv);
 
   // ---- texts ----
   const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };
@@ -156,8 +149,7 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
     setAttr(input, 'aria-label', t('placeholder'));
     setAttr(sendBtn, 'aria-label', t('send'));
     label(inviteBtn, t('invite'));
-    label(moreBtn, t('more'));
-    label(leaveBtn, t('leave'));
+      label(leaveBtn, t('leave'));
     label(panelBtn, t('minutes'));
     setText(dialogTitle, t('inviteTitle'));
     setAttr(dialogClose, 'aria-label', t('back'));
@@ -315,7 +307,6 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
     dialogList.replaceChildren(...list.map(inviteRow));
   }
   function openInvite() {
-    closeMenu();
     scrim.classList.add('show');
     dialogList.replaceChildren(el('div', 'spinner'));
     const token = ++inviteToken;
@@ -328,81 +319,10 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
   dialogClose.addEventListener('click', closeInvite);
   scrim.addEventListener('pointerdown', (e) => { if (e.target === scrim) closeInvite(); });
 
-  // ---- avatar-style menu ----
-  const menuOpen = () => menu.classList.contains('show');
-  const tasteIds = () => {
-    const tastes = store.state.tastes;
-    if (Array.isArray(tastes)) return tastes.map((x) => (typeof x === 'string' ? x : x && x.id)).filter(Boolean);
-    if (tastes && typeof tastes === 'object') return Object.keys(tastes);
-    return FALLBACK_TASTES;
-  };
-  const tasteLabel = (id) => {
-    const ui = store.state.ui || {};
-    return ui['taste' + id.charAt(0).toUpperCase() + id.slice(1)] ?? id;
-  };
-  function buildMenu() {
-    const ids = tasteIds();
-    const people = store.state.participants || [];
-    const items = [];
-    const head = el('div', 'menu-head');
-    head.textContent = t('taste');
-    items.push(head);
-    for (const id of ids) {
-      const item = button('menu-item', icon('check') + '<span></span>');
-      item.setAttribute('role', 'menuitemradio');
-      item.setAttribute('aria-checked', String(people.length > 0 && people.every((p) => p.taste === id)));
-      item.lastChild.textContent = tasteLabel(id);
-      item.addEventListener('click', () => { closeMenu(); if (onTaste) onTaste(id, '*'); });
-      items.push(item);
-    }
-    if (people.length) {
-      items.push(el('div', 'menu-sep'));
-      for (const p of people) {
-        const row = el('div', 'menu-person');
-        const name = el('span', 'menu-person-name');
-        name.textContent = p.label || p.name;
-        const chips = el('span', 'menu-chips');
-        for (const id of ids) {
-          const chip = button('chip');
-          chip.setAttribute('role', 'menuitemradio');
-          chip.setAttribute('aria-checked', String(p.taste === id));
-          chip.textContent = tasteLabel(id);
-          chip.addEventListener('click', () => { closeMenu(); if (onTaste) onTaste(id, p.name); });
-          chips.append(chip);
-        }
-        row.append(name, chips);
-        items.push(row);
-      }
-    }
-    menu.replaceChildren(...items);
-  }
-  function placeMenu() {
-    const r = moreBtn.getBoundingClientRect();
-    const w = menu.offsetWidth;
-    menu.style.left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), window.innerWidth - w - 8) + 'px';
-    menu.style.bottom = window.innerHeight - r.top + 12 + 'px';
-  }
-  function openMenu() {
-    closeInvite();
-    buildMenu();
-    menu.classList.add('show');
-    placeMenu();
-    moreBtn.setAttribute('aria-expanded', 'true');
-  }
-  function closeMenu() {
-    menu.classList.remove('show');
-    moreBtn.setAttribute('aria-expanded', 'false');
-  }
-  moreBtn.addEventListener('click', () => (menuOpen() ? closeMenu() : openMenu()));
-  document.addEventListener('pointerdown', (e) => {
-    if (menuOpen() && !menu.contains(e.target) && !moreBtn.contains(e.target)) closeMenu();
-  });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    closeMenu();
     closeInvite();
   });
-  window.addEventListener('resize', () => { if (menuOpen()) placeMenu(); });
 
   // ---- leave, back, countdown ----
   leaveBtn.addEventListener('click', () => { if (onLeave) onLeave(); });
@@ -509,7 +429,6 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
     if (s.lang && document.documentElement.lang !== s.lang) document.documentElement.lang = s.lang;
     syncPhase();
     syncUnread();
-    if (menuOpen()) buildMenu();
   }
 
   // The bar's own click handlers drop focus after a mouse click (Space is the talk key)
@@ -530,8 +449,6 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
     closeInviteAsk: closeAsk,
     openInvite,
     closeInvite,
-    openMenu,
-    closeMenu,
     togglePanel: () => setPanel(!panelOpen()),
   };
 }
