@@ -2,6 +2,10 @@
 
 A voice meeting with your Claude Code sessions. You talk in the browser; the sessions running in tmux hear you, answer by voice, show files on a shared screen and pass the turn to each other. The page looks and behaves like Google Meet with the cameras off.
 
+![A meeting with three Claude Code sessions: captions, a thought balloon, a murmur and the People panel](docs/screenshot.png)
+
+<sub>Made-up names and data. The reviewer uses a custom image (`look.image`).</sub>
+
 ```mermaid
 flowchart LR
   H["You (browser)"] -- "voice / text" --> S["meetdown server"]
@@ -70,7 +74,7 @@ Open the copied URL. The token is stored as a cookie, so later visits need only 
 1. Start two or three Claude Code sessions in tmux and name them (`/rename`).
 2. `bin/start`, then open the page.
 3. Press the invite button (or open People) and invite a session. It gets a short notice and reads `prompts/meeting.md`, the guide on how to talk here.
-4. Hold the mic button (or Space) and say: "Watchdog, what are you working on?". The named session answers by voice.
+4. Hold the mic button (or Space) and say: "Reviewer, what are you working on?". The named session answers by voice.
 5. Ask it to show something. It runs `meet-say --share <file>` and the page switches to the presenting layout. Hover it to pin or close.
 6. Press the red button to leave. The meeting closes and everyone gets a summary.
 

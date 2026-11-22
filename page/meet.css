@@ -457,6 +457,7 @@ svg { display: block; fill: currentColor; }
 
 .captions { position: fixed; z-index: 4; left: 50%; bottom: calc(var(--bar-h) + var(--sab) + 8px); transform: translateX(-50%); width: min(760px, calc(100vw - 32px)); display: flex; gap: 12px; align-items: flex-start; padding: 10px 14px; border-radius: 12px; background: rgba(32, 33, 36, .88); color: #fff; pointer-events: none; }
 .captions[hidden] { display: none; }
+body[data-panel] .captions { left: calc(50% - 183px); width: min(760px, calc(100vw - 400px)); } /* centred on the stage, not over the side panel */
 .cap-badge { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%; background: #1a73e8; display: grid; place-items: center; font-size: 15px; font-weight: 500; }
 .cap-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .cap-who { font-size: 13px; line-height: 18px; color: #bdc1c6; }

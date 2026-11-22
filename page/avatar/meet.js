@@ -43,6 +43,8 @@ export function distinctLetters(participants = []) {
     if (list.length < 2) continue;
     let n = 0;
     while (list.every((x) => x.chars.length > n && x.chars[n].toLowerCase() === list[0].chars[n].toLowerCase())) n++;
+    while (n > 0 && /[\p{L}\p{N}]/u.test(list[0].chars[n - 1])) n--; // cut only at a separator: "labs-" yes, "D" of Designer/Docs no
+    if (!n) continue;
     for (const x of list) {
       const rest = x.chars.slice(n).join('').replace(/^[^\p{L}\p{N}]+/u, '');
       if (rest) out[x.name] = initialOf(rest);
