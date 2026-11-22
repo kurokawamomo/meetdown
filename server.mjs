@@ -87,7 +87,7 @@ const roster = new Roster({
 const thoughts = createThoughts({ sessionsDir: path.join(os.homedir(), '.claude/sessions'), projectsDir: path.join(os.homedir(), '.claude/projects'), log });
 const thoughtText = new Map(); // name -> latest thought
 // A new thought is also voiced, very short and quiet (the page plays it at low volume and fades it out), at most
-// once per THOUGHT_VOICE_GAP_MS per participant; thoughtVoice: false in config.json turns it off
+// once per THOUGHT_VOICE_GAP_MS per participant; off unless thoughtVoice: true in config.json
 const THOUGHT_VOICE_CHARS = 20;
 const THOUGHT_VOICE_GAP_MS = 10000;
 const thoughtVoicedAt = new Map(); // name -> time
@@ -95,7 +95,7 @@ thoughts.on('thought', ({ name, text }) => {
   thoughtText.set(name, text);
   emit('thought', { name, text });
   const p = roster.byName(name);
-  if (CONFIG.thoughtVoice === false || !text || !p || !inMeeting(name) || meeting.info().state !== 'open') return;
+  if (CONFIG.thoughtVoice !== true || !text || !p || !inMeeting(name) || meeting.info().state !== 'open') return;
   if (Date.now() - (thoughtVoicedAt.get(name) || 0) < THOUGHT_VOICE_GAP_MS) return;
   thoughtVoicedAt.set(name, Date.now());
   const said = [...text].slice(0, THOUGHT_VOICE_CHARS).join('');
