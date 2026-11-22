@@ -416,9 +416,11 @@ svg { display: block; fill: currentColor; }
 .stage.presenting .sp-lines { max-height: 42px; }
 .pres { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .pres-head {
-  flex: 0 0 auto;
-  align-self: flex-start;
-  max-width: 100%;
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 1;
+  max-width: calc(100% - 24px);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -436,6 +438,11 @@ svg { display: block; fill: currentColor; }
 .pres-btn:hover { background: rgba(255, 255, 255, .12); }
 .pres-btn svg { display: block; width: 20px; height: 20px; fill: currentColor; }
 .pres-btn.pres-pin.off { opacity: .6; }
+/* the head and the caption lie over the shared content and show only while the mouse is over it (always on touch screens) */
+@media (hover: hover) {
+  .pres-head, .pres-caption { opacity: 0; transition: opacity .2s; }
+  .pres:hover .pres-head, .pres:hover .pres-caption, .pres-head:focus-within { opacity: 1; }
+}
 /* unpinned: the shared content is one tile among the participants */
 .pres.pres-tile { flex: 0 0 auto; width: var(--tw, 320px); height: var(--th, 240px); gap: 6px; }
 .pres.pres-tile .pres-head { padding: 4px 10px 4px 8px; font-size: 12px; }
@@ -444,7 +451,6 @@ svg { display: block; fill: currentColor; }
 .pres-frame[data-kind="image"] { background: #0b0b0c; }
 .pres-frame iframe { flex: 1 1 auto; width: 100%; height: 100%; border: 0; background: #fff; }
 .pres-frame img { width: 100%; height: 100%; object-fit: contain; -webkit-user-drag: none; }
-/* the caption lies over the bottom of the shared content */
 .pres-caption { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 1; max-width: calc(100% - 24px); padding: 4px 12px; border-radius: 12px; background: rgba(32, 33, 36, .85); color: var(--text); font-size: 13px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------------------------------------------------------------- captions: what the human said, like Meet's */
