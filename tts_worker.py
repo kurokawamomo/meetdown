@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.expanduser("~/.claude/skills/tts/scripts"))
 from tts_gen import SR, gap, load, split, write_wav  # noqa: E402
 
 OUT = sys.argv[1]
+SPEED = float(os.environ.get("MEETDOWN_SPEED") or 1)  # speaking speed, 1.0 = VOICEVOX default
 jobs, cancelled, lock = queue.Queue(), set(), threading.Lock()
 
 
@@ -52,7 +53,13 @@ def main():
                 with lock:
                     if uid in cancelled:
                         break
-                r = wave.open(io.BytesIO(run(syn.tts(c, sid))))
+                if SPEED == 1:
+                    data = run(syn.tts(c, sid))
+                else:
+                    q = run(syn.create_audio_query(c, sid))
+                    q.speed_scale = SPEED
+                    data = run(syn.synthesis(q, sid))
+                r = wave.open(io.BytesIO(data))
                 pcm = r.readframes(r.getnframes())
                 name = f"{uid}-{i}.wav"
                 write_wav(os.path.join(OUT, name), pcm)

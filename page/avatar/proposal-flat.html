@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>flat proposal</title>
+<style>
+body{margin:0;padding:24px;background:#131314;color:#c4c7c5;font:13px system-ui,sans-serif}
+h2{font-weight:500;margin:18px 0 10px}
+.big{display:grid;grid-template-columns:repeat(3,360px);gap:14px}
+.row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.row b{width:90px;font-weight:500}
+.tile{position:relative;overflow:hidden;border-radius:14px;background:#1f2023;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.tile::before{content:"";position:absolute;width:70%;height:70%;left:15%;top:15%;border-radius:50%;background:var(--tint);filter:blur(46px);opacity:.38}
+.tile>*{position:relative}
+.big .tile{height:380px}
+.small .tile{width:156px;height:156px}
+.tiny .tile{width:112px;height:112px;border-radius:10px}
+.av{width:var(--s);height:var(--s)}
+.cap{position:absolute!important;left:10px;bottom:8px;font-size:12px;color:#fff}
+.tiny .cap{display:none}
+</style></head><body>
+<h2>Chair fox, 320px</h2><div class="big" id="big"></div>
+<h2>Other seeds, 140px</h2><div class="small" id="small"></div>
+<h2>96px</h2><div class="tiny" id="tiny"></div>
+<script type="module">
+import { create, traitsOf } from './flat.js';
+const q = new URLSearchParams(location.search);
+const moods = ['idle', 'speaking', 'thinking', 'listening', 'surprised', 'away'];
+function tile(parent, seed, look, mood, size, cap) {
+  const t = traitsOf({ seed, look });
+  const d = document.createElement('div'); d.className = 'tile'; d.style.setProperty('--tint', t.color.hex);
+  const a = document.createElement('div'); a.className = 'av'; a.style.setProperty('--s', size + 'px');
+  const av = create({ seed, look, label: seed }); a.appendChild(av.el); av.setMood(mood);
+  const c = document.createElement('span'); c.className = 'cap'; c.textContent = cap;
+  d.append(a, c); parent.appendChild(d);
+}
+for (const m of moods) tile(document.getElementById('big'), 'foxhound', { species: 'fox', color: '#f2a7a3', accessory: 'bowtie' }, m, 320, m);
+const seeds = [['cat', 'Labs-01', 'scarf'], ['bear', 'Labs-HQ', 'ribbon'], ['rabbit', 'root-01', 'glasses'], ['owl', 'watchdog', 'ribbon'], ['fox', 'e5', 'hat'], ['owl', 'night', 'glasses'], ['cat', 'tab', 'bowtie'], ['bear', 'kuma', 'hat'], ['rabbit', 'usa', 'scarf']];
+for (const [sp, s, acc] of seeds) {
+  const row = document.createElement('div'); row.className = 'row'; row.innerHTML = '<b>' + s + ' ' + sp + '</b>';
+  const w = document.createElement('div'); w.style.cssText = 'display:flex;gap:10px';
+  for (const m of moods) tile(w, s, { species: sp, accessory: acc }, m, 140, m);
+  row.appendChild(w); document.getElementById('small').appendChild(row);
+}
+const tw = document.createElement('div'); tw.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;width:1000px';
+const all = ['fox', 'cat', 'bear', 'rabbit', 'owl'];
+for (let i = 0; i < 10; i++) tile(tw, 'p' + i, { species: all[i % 5] }, moods[i % 6], 96, '');
+document.getElementById('tiny').appendChild(tw);
+if (q.get('t') !== null) {
+  const t = Number(q.get('t')) * 1000;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    for (const a of document.getAnimations()) { if (a instanceof CSSTransition) { a.finish(); continue; } a.pause(); a.currentTime = t; }
+  }));
+}
+</script></body></html>

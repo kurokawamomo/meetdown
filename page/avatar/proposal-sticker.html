@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sticker taste proposal</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: #131314; color: #9aa0a6; font: 13px system-ui, sans-serif; }
+  h2 { margin: 18px 0 10px; font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; }
+  .tile { position: relative; border-radius: 16px; overflow: hidden; background: #1c1c1f; }
+  .tile::before { content: ""; position: absolute; inset: -20%; background: radial-gradient(circle at 50% 45%, var(--bg) 0%, transparent 62%); filter: blur(24px); opacity: .85; }
+  .tile .av { position: absolute; inset: 6% 6% 3%; }
+  .tile small { position: absolute; left: 10px; bottom: 8px; color: #e8eaed; font-size: 12px; text-shadow: 0 1px 2px #000; }
+  .big .tile { width: 320px; height: 320px; }
+  .small .tile { width: 140px; height: 140px; }
+  .small .tile small { font-size: 11px; left: 8px; bottom: 5px; }
+  .tiny .tile { width: 96px; height: 96px; border-radius: 10px; }
+  .tiny .tile small { display: none; }
+  .freeze .tile *, .freeze .tile { animation-play-state: paused !important; }
+  .freeze .tile[data-mood=speaking] * { animation-delay: -.083s !important; }
+  .freeze .tile[data-mood=thinking] * { animation-delay: -.9s !important; }
+  .freeze .tile[data-mood=listening] * { animation-delay: -.36s !important; }
+  .freeze .tile[data-mood=surprised] * { animation-delay: -.36s !important; }
+  .freeze .tile[data-mood=idle] * { animation-delay: -.5s !important; }
+  .freeze .tile[data-mood=away] * { animation-delay: -1.2s !important; }
+</style>
+</head>
+<body>
+<h2>Chair (fox, bow tie)</h2>
+<div class="row big" id="big"></div>
+<h2>Other seeds</h2>
+<div class="row small" id="small"></div>
+<h2>96px</h2>
+<div class="row tiny" id="tiny"></div>
+<script type="module">
+import { create, traitsOf } from './sticker.js';
+const q = new URLSearchParams(location.search);
+if (q.get('freeze')) document.body.classList.add('freeze');
+const ALL = ['idle', 'speaking', 'thinking', 'listening', 'surprised', 'away'];
+const CHAIR = { seed: 'chair', look: { species: 'fox', color: '#f2a7a3', accessory: 'bowtie' } };
+const OTHERS = [
+  { seed: 'guest-a', look: { species: 'cat', accessory: 'scarf' } },
+  { seed: 'guest-b', look: { species: 'bear', accessory: 'glasses' } },
+  { seed: 'guest-c', look: { species: 'rabbit', accessory: 'ribbon' } },
+  { seed: 'guest-d', look: { species: 'owl', accessory: 'hat' } },
+  { seed: 'guest-1' }, { seed: 'guest-2' },
+];
+function tile(host, subject, mood, caption) {
+  const a = create({ seed: subject.seed, look: subject.look || {}, label: subject.seed });
+  a.setMood(mood);
+  const t = document.createElement('div');
+  t.className = 'tile';
+  t.dataset.mood = mood;
+  const tr = traitsOf(subject);
+  t.style.setProperty('--bg', `hsl(${Math.round(tr.color.h)} 45% 32%)`);
+  const box = document.createElement('div');
+  box.className = 'av';
+  box.appendChild(a.el);
+  const c = document.createElement('small');
+  c.textContent = caption || mood;
+  t.append(box, c);
+  host.appendChild(t);
+}
+for (const m of ALL) tile(document.getElementById('big'), CHAIR, m);
+const MOODSEQ = ['idle', 'speaking', 'thinking', 'listening', 'surprised', 'away'];
+OTHERS.forEach((s, i) => { for (const m of [MOODSEQ[i % 6], MOODSEQ[(i + 2) % 6], MOODSEQ[(i + 4) % 6]]) tile(document.getElementById('small'), s, m); });
+for (const s of [CHAIR, ...OTHERS]) for (const m of ['idle', 'speaking', 'thinking']) tile(document.getElementById('tiny'), s, m);
+</script>
+</body>
+</html>

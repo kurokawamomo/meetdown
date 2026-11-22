@@ -25,7 +25,7 @@ const UI = {
   sendError: 'Could not send: ', reconnecting: 'Disconnected. Reconnecting...',
   paneMissing: 'Could not find the pane of {name}', gaveUp: 'Could not deliver to {name} ({why})',
   invite: 'Add people', inviteTitle: 'Add a session', noOneToInvite: 'No session to add', more: 'More',
-  taste: 'Avatar style', tasteCritters: 'Critters', tasteMeet: 'Meet circles',
+  taste: 'Avatar style', tastePixel: 'Pixel', tasteFlat: 'Flat', tasteSticker: 'Sticker', tasteGeo: 'Geometric', tasteMeet: 'Meet circles',
   leave: 'Leave', leaving: 'Ending the meeting in {seconds} s', back: 'Back', ended: 'The meeting has ended',
   summary: 'Summary', summaryFailed: 'Could not summarize', focus: 'Focus', aside: 'Aside', dismiss: 'Remove',
   asideNext: 'Next message only', minutes: 'Minutes', share: 'Shared', joined: 'joined', left: 'left',
@@ -33,7 +33,7 @@ const UI = {
   ...(CONFIG.ui || {}),
 };
 const fill = (s, v) => String(s).replace(/\{(\w+)\}/g, (_, k) => v[k] ?? '');
-const TASTES = ['critters', 'meet'];
+const TASTES = ['pixel', 'flat', 'sticker', 'geo', 'meet'];
 const SHARE_MS = (CONFIG.shareMinutes ?? 2) * 60000;
 const GRACE_MS = (CONFIG.leaveGraceSeconds ?? 10) * 1000;
 // tmux-foxhound's pane delivery, found in whichever plugin marketplace has it installed
@@ -78,12 +78,13 @@ const courier = createCourier({
     note(why === 'no-pane' ? fill(UI.paneMissing, { name: label }) : fill(UI.gaveUp, { name: label, why }));
   },
 });
+process.env.MEETDOWN_SPEED = String(CONFIG.speechSpeed ?? 1); // read by tts_worker.py
 const speech = createSpeech({ stateDir: STATE, audioDir: AUDIO, log });
 const roster = new Roster({
   sessionsDir: path.join(os.homedir(), '.claude/sessions'),
   people: CONFIG.people || {},
   voicePool: CONFIG.voicePool || [],
-  defaultTaste: prefs.defaultTaste || CONFIG.defaultTaste || 'critters',
+  defaultTaste: prefs.defaultTaste || CONFIG.defaultTaste || 'pixel',
 });
 
 // ---- Meeting state that lives outside the log: focus (Z-targeting), aside, share clock, awaited replies ----
@@ -96,7 +97,7 @@ const awaiting = new Map(); // name -> { since: id, sawBusy: boolean }
 const chairName = () => (roster.participants().find((p) => p.chair) || {}).name || null;
 const inMeeting = (name) => roster.participants().some((p) => p.name === name);
 const labelOf = (name) => (roster.byName(name) || {}).label || name;
-const tasteOf = (p) => prefs.tastes[p.name] || prefs.defaultTaste || p.taste || CONFIG.defaultTaste || 'critters';
+const tasteOf = (p) => prefs.tastes[p.name] || prefs.defaultTaste || p.taste || CONFIG.defaultTaste || 'pixel';
 const publicParticipant = (p) => ({ name: p.name, label: p.label, status: p.status, chair: !!p.chair, taste: tasteOf(p), look: p.look || {}, address: p.address, title: p.title });
 const rosterPayload = () => ({ participants: roster.participants().map(publicParticipant), focus, aside });
 const entry = (fields) => ({ to: [], maybe: [], aside: false, ...fields });
@@ -166,7 +167,10 @@ setInterval(() => roster.poll(), 3000).unref();
 async function human(kind, raw) {
   if (meeting.info().state !== 'open') return; // nothing reaches the panes while the meeting is ending
   const text = raw.replace(/^\u300c([^\u300c\u300d]*)\u300d$/, '$1'); // whisper may wrap a Japanese sentence in corner brackets
-  const others = roster.live().filter((s) => !inMeeting(s.name));
+  // Sessions not in the meeting yet answer to their configured label and aliases too ("bring in <alias>")
+  const people = CONFIG.people || {};
+  const others = roster.live().filter((s) => !inMeeting(s.name))
+    .map((s) => ({ ...s, label: (people[s.name] || {}).label || s.title || s.name, aliases: (people[s.name] || {}).aliases || [] }));
   for (const name of findInvites({ text, live: others, inviteWords: CONFIG.inviteWords || [], sessionReadings: CONFIG.sessionReadings || {} })) {
     if (roster.join(name)) meeting.append(entry({ kind: 'join', from: name, text: UI.joined }));
   }
@@ -199,6 +203,12 @@ setInterval(async () => {
   meeting.append(entry({ kind: 'share', from: 'system', to: sent, text: digest }));
   for (const name of sent) emit('signal', { name, kind: 'shared' });
 }, 10000).unref();
+
+// VOICEVOX reads a space as a pause, so drop spaces next to Japanese text (kana, kanji, full-width forms) before speaking.
+// The minutes keep the original text.
+const JA = '\\u3000-\\u30ff\\u3400-\\u9fff\\uff00-\\uffef';
+const SPACE_NEAR_JA = new RegExp(`(?<=[${JA}])[ \\t]+|[ \\t]+(?=[${JA}])`, 'g');
+const forSpeech = (text) => text.replace(SPACE_NEAR_JA, '');
 
 // ---- Speech output ----
 speech.on('audio', (m) => {
@@ -327,7 +337,7 @@ const routes = {
     awaiting.delete(p.name);
     const u = meeting.append(entry({ kind: 'say', from: p.name, text: t, play: 'queued' }));
     if (pass && p.chair && inMeeting(pass)) { focus = [pass]; emit('roster', rosterPayload()); }
-    speech.speak(u.id, t, p.voice, p.style);
+    speech.speak(u.id, forSpeech(t), p.voice, p.style);
     sendRes(res, 200, { note: `spoken in the meeting (utterance ${u.id})` });
   },
 };

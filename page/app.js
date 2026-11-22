@@ -99,6 +99,13 @@ store.on('meeting', (m) => {
   if (m && m.state === 'closed') talk.closeMic();
 });
 
+// Release the microphone while another window has focus. An open voice-processing stream (echo cancellation)
+// makes other apps on the same machine record near silence, so a dictation tool in another window loses its words.
+// The stream is opened again on the next press.
+const releaseMic = () => setTimeout(() => { if (talk.state === 'idle') talk.closeMic(); }, 500);
+window.addEventListener('blur', releaseMic);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseMic(); });
+
 // ---- Views ----
 safely('stage', () => createStage(mount('stage'), {
   store,

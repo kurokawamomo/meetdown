@@ -17,7 +17,7 @@ const icon = (name, cls = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" fo
 const PANEL_KEY = 'meetdown.panel';
 const RING = 339.3; // circumference of the countdown ring (r = 54)
 const GRACE_FALLBACK_MS = 10000;
-const FALLBACK_TASTES = ['critters', 'meet'];
+const FALLBACK_TASTES = ['pixel', 'meet'];
 // ui keys this module renders; a changed value anywhere in this list re-applies the texts
 const UI_KEYS = ['talk', 'placeholder', 'send', 'invite', 'inviteTitle', 'more', 'taste', 'leave', 'back', 'summary', 'minutes', 'holding', 'toggled'];
 
