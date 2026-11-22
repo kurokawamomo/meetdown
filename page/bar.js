@@ -6,6 +6,7 @@ const ICON = {
   micOff: '<path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3 3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/>',
   send: '<path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"/>',
   personAdd: '<path d="M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>',
+  people: '<path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>',
   chat: '<path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z"/>',
   callEnd: '<path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.73-1.68-1.36-2.66-1.85-.33-.16-.56-.51-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/>',
   close: '<path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>',
@@ -86,13 +87,17 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
   const center = el('div', 'bar-center');
   center.append(micWrap, form, inviteBtn, leaveBtn);
 
+  const peopleBtn = button('btn ghost btn-panel btn-people', icon('people'));
+  peopleBtn.setAttribute('aria-pressed', 'false');
+  const peopleCount = el('span', 'count');
+  peopleBtn.append(peopleCount);
   const panelBtn = button('btn ghost btn-panel', icon('chat'));
   panelBtn.setAttribute('aria-pressed', 'false');
   const badge = el('span', 'badge');
   badge.hidden = true;
   panelBtn.append(badge);
   const right = el('div', 'bar-right');
-  right.append(panelBtn);
+  right.append(peopleBtn, panelBtn);
 
   const toast = el('div', 'toast');
   toast.setAttribute('role', 'status');
@@ -151,6 +156,7 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
     label(inviteBtn, t('invite'));
       label(leaveBtn, t('leave'));
     label(panelBtn, t('minutes'));
+    label(peopleBtn, (t('people') && t('people') !== 'people') ? t('people') : 'People');
     setText(dialogTitle, t('inviteTitle'));
     setAttr(dialogClose, 'aria-label', t('back'));
     setText(backBtn, t('back'));
@@ -400,6 +406,7 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
   // open or closed by anyone (this button, the panel's close button): remember it on wide screens
   function syncPanelButton() {
     panelBtn.setAttribute('aria-pressed', String(panelOpen()));
+    peopleBtn.setAttribute('aria-pressed', String(body.dataset.panel === 'people'));
     try { if (wide()) localStorage.setItem(PANEL_KEY, panelOpen() ? '1' : '0'); } catch (_) { /* storage may be blocked */ }
     syncUnread();
   }
@@ -407,6 +414,10 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
     if (wide() && localStorage.getItem(PANEL_KEY) === '1') setPanel(true);
   } catch (_) { /* storage may be blocked */ }
   panelBtn.addEventListener('click', () => setPanel(!panelOpen()));
+  peopleBtn.addEventListener('click', () => {
+    if (body.dataset.panel === 'people') delete body.dataset.panel;
+    else body.dataset.panel = 'people';
+  });
   new MutationObserver(syncPanelButton).observe(body, { attributes: true, attributeFilter: ['data-panel'] });
   panelBtn.setAttribute('aria-pressed', String(panelOpen()));
 
@@ -424,6 +435,7 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
     syncConnection();
     const id = (s.meeting && s.meeting.id) || '';
     setText(mid, id);
+    setText(peopleCount, String((store.state.participants || []).length + 1));
     const title = id ? 'meetdown ' + id : 'meetdown';
     if (document.title !== title) document.title = title;
     if (s.lang && document.documentElement.lang !== s.lang) document.documentElement.lang = s.lang;

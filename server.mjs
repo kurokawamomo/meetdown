@@ -418,6 +418,12 @@ const routes = {
     ok(res);
     await dismiss(name);
   },
+  // From the People panel: talk to this participant only (the baton goes to it alone)
+  'POST /api/baton': async (req, res) => {
+    const { name } = await json(req);
+    if (inMeeting(name)) { baton = [name]; emit('baton', { holders: baton }); }
+    ok(res);
+  },
   'POST /api/leave': async (req, res) => { if (meeting.info().state === 'open') meeting.leave(GRACE_MS); ok(res); },
   'POST /api/back': async (req, res) => { if (meeting.info().state === 'leaving') meeting.back(); ok(res); },
   // From an AI pane (meet-say --route): this word sends the baton to that participant, kept or for this meeting only

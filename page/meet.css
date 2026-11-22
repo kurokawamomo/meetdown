@@ -737,7 +737,24 @@ svg { display: block; fill: currentColor; }
   border-radius: 16px;
   overflow: hidden;
 }
-body[data-panel="open"] .panel { display: flex; }
+body[data-panel="open"] .panel:not(.people), body[data-panel="people"] .panel.people { display: flex; }
+
+/* People panel, like Meet's */
+.pp-section { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 6px; color: var(--dim); font-size: 12px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; }
+.pp-row { display: flex; align-items: center; gap: 12px; min-height: 48px; }
+.pp-badge { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; color: #fff; font-size: 15px; font-weight: 500; background: #5f6368; }
+.pp-badge img { width: 100%; height: 100%; object-fit: cover; }
+.pp-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.pp-tag { margin-left: 6px; padding: 0 6px; border-radius: 4px; background: rgba(255, 255, 255, .12); color: var(--dim); font-size: 11px; }
+.pp-marks { flex: 0 0 auto; display: flex; gap: 4px; color: var(--blue); }
+.pp-marks svg { width: 18px; height: 18px; fill: currentColor; }
+.pp-act { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; color: var(--text); }
+.pp-act:hover { background: rgba(255, 255, 255, .1); }
+.pp-act.on { color: var(--blue); }
+.pp-act svg { width: 20px; height: 20px; fill: currentColor; }
+.pp-out .pp-name { color: var(--dim); }
+.btn-people { position: relative; }
+.btn-people .count { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--chip); color: var(--text); font-size: 10px; line-height: 16px; text-align: center; }
 .panel-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 4px 20px; }
 .panel-title { margin: 0; font-size: 16px; line-height: 24px; font-weight: 500; color: var(--text); }
 .x-btn {
@@ -948,10 +965,10 @@ body[data-panel="open"] .panel { display: flex; }
     height: auto;
     grid-template-rows: none;
     align-content: normal;
-    grid-template-columns: repeat(4, auto);
+    grid-template-columns: repeat(5, auto);
     grid-template-areas:
-      "chat chat chat chat"
-      "mic invite panel leave";
+      "chat chat chat chat chat"
+      "mic invite people panel leave";
     justify-content: space-between;
     row-gap: 8px;
     margin: 8px var(--pad) calc(var(--pad) + var(--sab));
@@ -977,6 +994,7 @@ body[data-panel="open"] .panel { display: flex; }
   .mic-wrap { grid-area: mic; }
   .btn-invite { grid-area: invite; }
   .btn-panel { grid-area: panel; width: 56px; border-radius: 24px; }
+  .btn-people { grid-area: people; }
   .btn-panel[aria-pressed="true"] { border-radius: 16px; }
   .leave { grid-area: leave; }
   .toast { bottom: calc(100% + 4px); }

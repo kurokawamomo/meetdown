@@ -2,6 +2,7 @@
 // three views (stage, bar, panel); the user's actions go back to the HTTP API. All requests are
 // same-origin, so the cookie carries the token.
 import { createCaptions } from './captions.js';
+import { createPeople } from './people.js';
 import { createStore } from './store.js';
 import { createTalk } from './talk.js';
 import { createPlayer } from './player.js';
@@ -173,3 +174,10 @@ bar = safely('bar', () => createBar(mount('bar'), {
 }));
 safely('panel', () => createPanel(mount('panel'), { store }));
 captions = safely('captions', () => createCaptions(mount('captions'), { store }));
+safely('people', () => createPeople(mount('people'), {
+  store,
+  fetchLive,
+  onDismiss: (name) => post('/api/dismiss', { name }),
+  onInvite: (name) => post('/api/invite', { name }),
+  onBaton: (name) => post('/api/baton', { name }),
+}));
