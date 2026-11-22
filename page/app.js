@@ -102,6 +102,7 @@ async function sendRecording(blob, mime, info = {}) {
 const talk = createTalk({
   holdMs: () => store.state.holdMs,
   interimSeconds: () => store.state.interimSeconds,
+  autoEnd: () => store.state.autoEnd,
   enabled: () => !['closing', 'closed'].includes(store.state.meeting && store.state.meeting.state), // nothing to say to a finished meeting
   unlock: player.unlock,
   onPress: () => post('/api/press', player.stopAll(), { quiet: true }), // barge-in: stop the voices and tell the server what was cut
@@ -145,6 +146,7 @@ stage = safely('stage', () => createStage(mount('stage'), {
   talk,
   avatarFor,
   onDismiss: (name) => post('/api/dismiss', { name }),
+  onShareClose: () => post('/api/share-close', {}),
 }));
 bar = safely('bar', () => createBar(mount('bar'), {
   store,

@@ -51,5 +51,6 @@
   "ui": {},
   "speechSpeed": 1.0,
   "interimSeconds": [15, 20, 25],
-  "murmurMaxChars": 30
+  "murmurMaxChars": 30,
+  "autoEnd": { "afterSeconds": 15, "quietSeconds": 5 }
 }

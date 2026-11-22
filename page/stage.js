@@ -20,6 +20,8 @@ const ICON = {
   group: '<path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>',
   present: '<path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/>',
 };
+ICON.pin = '<path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/>';
+ICON.close = '<path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>';
 const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[name]}</svg>`;
 
 function div(cls, html) {
@@ -69,7 +71,7 @@ function speakingNames(s) {
 
 const holdersOf = (b) => new Set(Array.isArray(b) ? b : (b && b.holders) || []);
 
-export function createStage(root, { store, onDismiss, avatarFor, talk } = {}) {
+export function createStage(root, { store, onDismiss, onShareClose, avatarFor, talk } = {}) {
   root.classList.add('stage');
   const empty = div('stage-empty', icon('group'));
   const grid = div('grid');
@@ -77,6 +79,20 @@ export function createStage(root, { store, onDismiss, avatarFor, talk } = {}) {
   // presenting layout: the shared content (iframe or img) with a header pill and an optional caption
   const shareHead = div('share-head', icon('present') + '<span class="share-title"></span>');
   const shareTitle = shareHead.lastChild;
+  // Meet's controls on the shared content: unpin (it becomes one tile among the others) and close (for everyone)
+  const sharePin = document.createElement('button');
+  sharePin.type = 'button';
+  sharePin.className = 'share-btn share-pin';
+  sharePin.innerHTML = icon('pin');
+  const shareClose = document.createElement('button');
+  shareClose.type = 'button';
+  shareClose.className = 'share-btn share-close';
+  shareClose.innerHTML = icon('close');
+  shareHead.append(sharePin, shareClose);
+  let pinned = true; // this viewer's choice; a new share is pinned again
+  let pinnedFor = null;
+  sharePin.addEventListener('click', (e) => { e.stopPropagation(); pinned = !pinned; render(); });
+  shareClose.addEventListener('click', (e) => { e.stopPropagation(); if (onShareClose) onShareClose(); });
   const shareFrame = div('share-frame');
   const shareCaption = div('share-caption');
   const shareEl = div('share');
@@ -297,7 +313,7 @@ export function createStage(root, { store, onDismiss, avatarFor, talk } = {}) {
 
   // ---- layout ----
   function applyLayout() {
-    const n = tiles.size;
+    const n = tiles.size + (shareEl.classList.contains('share-tile') && !shareEl.hidden ? 1 : 0);
     const W = root.clientWidth;
     const H = root.clientHeight;
     if (n !== lastCount) {
@@ -366,8 +382,18 @@ export function createStage(root, { store, onDismiss, avatarFor, talk } = {}) {
 
   function syncShare(s, t) {
     const sh = s.share && s.share.src ? s.share : null;
-    root.classList.toggle('presenting', !!sh);
+    if (sh && sh.id !== pinnedFor) { pinnedFor = sh.id; pinned = true; }
+    const asTile = !!sh && !pinned;
+    root.classList.toggle('presenting', !!sh && pinned);
+    shareEl.classList.toggle('share-tile', asTile);
+    if (asTile && grid.lastChild !== shareEl) grid.append(shareEl); // last, so the participants keep their places
+    if (!asTile && shareEl.parentNode !== root) root.insertBefore(shareEl, grid);
     shareEl.hidden = !sh;
+    const pinLabel = t(pinned ? 'unpinShare' : 'pinShare');
+    if (sharePin.title !== pinLabel) { sharePin.title = pinLabel; sharePin.setAttribute('aria-label', pinLabel); }
+    sharePin.classList.toggle('off', !pinned);
+    const closeLabel = t('stopShare');
+    if (shareClose.title !== closeLabel) { shareClose.title = closeLabel; shareClose.setAttribute('aria-label', closeLabel); }
     if (!sh) {
       if (media) { media = null; shareFrame.replaceChildren(); }
       lastScroll = null;

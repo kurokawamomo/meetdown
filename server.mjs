@@ -30,7 +30,7 @@ const UI = {
   leave: 'Leave', leaving: 'Ending the meeting in {seconds} s', back: 'Back', ended: 'The meeting has ended',
   summary: 'Summary', summaryFailed: 'Could not summarize', dismiss: 'Remove', minutes: 'Minutes', joined: 'joined', left: 'left',
   baton: 'Baton', inviteAsk: 'Invite {name}?', inviteYes: 'Invite', inviteNo: 'Not now', dismissConfirm: 'Remove {name} from the meeting?',
-  dismissYes: 'Remove', dismissNo: 'Cancel', sharing: '{name} is presenting', passed: '{from} passed the baton to {to}', stopShare: 'Stop sharing', interim: 'Still talking', murmur: 'Murmur',
+  dismissYes: 'Remove', dismissNo: 'Cancel', sharing: '{name} is presenting', passed: '{from} passed the baton to {to}', stopShare: 'Stop sharing', unpinShare: 'Unpin', pinShare: 'Pin', interim: 'Still talking', murmur: 'Murmur',
   noReply: 'No spoken reply', toggled: 'Recording (tap to send)', holding: 'Recording (release to send)',
   ...(CONFIG.ui || {}),
 };
@@ -160,7 +160,7 @@ function emit(type, data) {
 }
 const snapshot = () => ({
   meeting: meeting.info(), list: meeting.list, ...rosterPayload(), ui: UI, lang: CONFIG.lang || 'en',
-  overlap: CONFIG.overlapSeconds ?? 0, holdMs: CONFIG.holdMs ?? 300, interimSeconds: CONFIG.interimSeconds ?? [15, 20, 25],
+  overlap: CONFIG.overlapSeconds ?? 0, holdMs: CONFIG.holdMs ?? 300, interimSeconds: CONFIG.interimSeconds ?? [15, 20, 25], autoEnd: CONFIG.autoEnd ?? { afterSeconds: 15, quietSeconds: 5 },
   tastes: TASTES, me: { owner: OWNER }, share, thoughts: Object.fromEntries(thoughtText),
 });
 setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 15000).unref();
@@ -384,6 +384,17 @@ const routes = {
       emit('signal', { name: pass, kind: 'called' });
       await courier.passed(meeting, roster, p.name, pass, t);
     }
+  },
+  // From the page: the human closes whatever is shared; the presenter is told
+  'POST /api/share-close': async (req, res) => {
+    ok(res);
+    if (!share) return;
+    const by = share.by;
+    share = null;
+    emit('share', null);
+    meeting.append(entry({ kind: 'share', from: 'human', text: 'closed the share' }));
+    const p = roster.byName(by);
+    if (p && inMeeting(by)) await courier.shareClosed(meeting, p);
   },
   // From an AI pane (meet-say --share/--unshare/--scroll): show a file or a URL to everyone
   'POST /api/share': async (req, res) => {

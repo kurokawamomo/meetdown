@@ -23,6 +23,7 @@ const serverDefaults = () => ({
   scroll: null, // { percent } of the last scroll event
   interim: {}, // live text of the turns being spoken: { [turn]: { text, parts: { [n]: text }, at } }
   interimSeconds: [15, 20, 25],
+  autoEnd: { afterSeconds: 15, quietSeconds: 5 },
   list: [],
   ui: {},
   lang: 'en',

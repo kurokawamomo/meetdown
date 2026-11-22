@@ -36,6 +36,12 @@ export function segmentDue({ startedAt, now, intervalMs }) {
   return Number.isFinite(intervalMs) && intervalMs > 0 && now - startedAt >= intervalMs;
 }
 
+// True when the human has talked long enough and then stayed quiet long enough: the turn ends by itself
+export function turnOver({ startedAt, quietSince, now, afterMs, quietMs }) {
+  if (!(afterMs > 0) || !(quietMs > 0) || quietSince == null) return false;
+  return now - startedAt >= afterMs && now - quietSince >= quietMs;
+}
+
 // Quiet for holdMs in a row = paused. feed(level, t) returns the paused flag; a level at or above the threshold ends it at once.
 export function createPauseDetector({ threshold = PAUSE_THRESHOLD, holdMs = PAUSE_MS } = {}) {
   let quietSince = null;
@@ -103,6 +109,15 @@ export function createTalkMachine({ holdMs = DEFAULT_HOLD_MS, now = () => Date.n
     }
   }
 
+  // The turn ended by rule (a long talk followed by a long silence): stop and send as if released
+  function end() {
+    if (state === 'idle') return;
+    source = null;
+    stopTap = false;
+    set('idle');
+    call(effects.stop, true);
+  }
+
   // The microphone could not start or stopped: back to idle, and the error goes out through onChange
   function fail(err) {
     source = null;
@@ -110,7 +125,7 @@ export function createTalkMachine({ holdMs = DEFAULT_HOLD_MS, now = () => Date.n
     set('idle', err || new Error('recording failed'));
   }
 
-  return { down, up, fail, get state() { return state; }, get error() { return error; } };
+  return { down, up, end, fail, get state() { return state; }, get error() { return error; } };
 }
 
 const browserMedia = () => ({
@@ -146,8 +161,10 @@ const defaultTyping = () => typeof document !== 'undefined' && isEditable(docume
 // onSend(blob, mime, { turn, part, final }) gets each part of the recording (the last has final = true and may
 // be empty when earlier parts went out); onCancel() is called when nothing will be sent at all (the mic failed,
 // or the recording was empty). Every press ends in a final part or onCancel.
+// autoEnd: { afterSeconds, quietSeconds } or a function returning it; a recording that ran afterSeconds and then
+// heard quietSeconds of silence is stopped and sent. 0 or missing turns it off.
 // interimSeconds: number or function; 0 turns the cutting off. onLevel(0..1) and onPause(bool) report the input.
-export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_INTERIM_SECONDS, onPress, onSend, onCancel, onLevel, onPause, unlock, enabled, now, isTyping, media, timers = {} } = {}) {
+export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_INTERIM_SECONDS, autoEnd = null, onPress, onSend, onCancel, onLevel, onPause, unlock, enabled, now, isTyping, media, timers = {} } = {}) {
   const clock = now || (() => Date.now());
   const every = timers.setInterval || ((fn, ms) => {
     const id = setInterval(fn, ms);
@@ -262,6 +279,12 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
       const rms = meter.read();
       call(onLevel, Math.min(1, rms * LEVEL_GAIN));
       setPaused(detector.feed(rms, t));
+      a.quietSince = rms < PAUSE_THRESHOLD ? a.quietSince ?? t : null;
+      const ae = (typeof autoEnd === 'function' ? autoEnd() : autoEnd) || {};
+      if (turnOver({ startedAt: a.startedAt, quietSince: a.quietSince, now: t, afterMs: Number(ae.afterSeconds) * 1000, quietMs: Number(ae.quietSeconds) * 1000 })) {
+        machine.end();
+        return;
+      }
     }
     if (segmentDue({ startedAt: a.segAt, now: t, intervalMs: interimMs(a.part) })) rotate(a);
   }
@@ -297,6 +320,8 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
         if (a.ended !== undefined) { a.finished = true; return call(onCancel); } // released before the microphone was ready
         a.stream = s;
         beginSegment(a);
+        a.startedAt = clock();
+        a.quietSince = null;
         detector.reset();
         a.ticker = every(() => tick(a), TICK_MS);
       })
