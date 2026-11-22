@@ -92,6 +92,17 @@ thoughts.on('thought', ({ name, text }) => { thoughtText.set(name, text); emit('
 let meeting = null;
 let baton = [];
 const unheard = new Map(); // utterance id -> audio events
+// Words that send the baton to someone, added from the panes (meet-say --route): kept ones live in a file, once ones end with the meeting
+const ROUTES = path.join(STATE, 'routes.json');
+const keptRoutes = (() => { try { return JSON.parse(fs.readFileSync(ROUTES, 'utf8')) || {}; } catch (_) { return {}; } })(); // word -> name
+const onceRoutes = new Map(); // word -> name; wins over a kept route of the same word
+function withRoutes(people) {
+  const to = new Map(Object.entries(keptRoutes));
+  for (const [w, n] of onceRoutes) to.set(w, n);
+  const extra = new Map();
+  for (const [w, n] of to) { if (!extra.has(n)) extra.set(n, []); extra.get(n).push(w); }
+  return people.map((p) => (extra.has(p.name) ? { ...p, aliases: [...(p.aliases || []), ...extra.get(p.name)] } : p));
+}
 const turns = new Map(); // turn id -> { parts: Map(part -> text), u: live interim utterance }
 const askedInvites = new Set();
 let share = null;
@@ -128,6 +139,7 @@ function openMeeting() {
   meeting.on('expire', () => endMeeting().catch((e) => log('end', e.stack || e.message)));
   baton = [];
   unheard.clear();
+  onceRoutes.clear();
   turns.clear();
   askedInvites.clear();
   share = null;
@@ -207,7 +219,7 @@ async function human(kind, raw) {
   const text = unwrap(raw);
   askInvites(text);
   const r = resolveBaton({
-    text, participants: roster.participants(), holders: baton, chairName: chairName(),
+    text, participants: withRoutes(roster.participants()), holders: baton, chairName: chairName(),
     everyoneWords: CONFIG.everyoneWords || [], sessionReadings: CONFIG.sessionReadings || {},
   });
   baton = r.holders;
@@ -371,6 +383,24 @@ const routes = {
   },
   'POST /api/leave': async (req, res) => { if (meeting.info().state === 'open') meeting.leave(GRACE_MS); ok(res); },
   'POST /api/back': async (req, res) => { if (meeting.info().state === 'leaving') meeting.back(); ok(res); },
+  // From an AI pane (meet-say --route): this word sends the baton to that participant, kept or for this meeting only
+  'POST /api/route': async (req, res) => {
+    const { pane, word, to, once, remove } = await json(req);
+    if (!roster.byPane(pane)) return sendRes(res, 403, 'this pane is not a participant of the meeting', 'text/plain; charset=utf-8');
+    const w = String(word || '').trim();
+    if (!w) return sendRes(res, 400, 'give a word', 'text/plain; charset=utf-8');
+    if (remove) {
+      onceRoutes.delete(w);
+      delete keptRoutes[w];
+    } else {
+      const target = roster.byName(to);
+      if (!target) return sendRes(res, 400, `unknown participant: ${to}`, 'text/plain; charset=utf-8');
+      if (once) onceRoutes.set(w, target.name);
+      else keptRoutes[w] = target.name;
+    }
+    fs.writeFileSync(ROUTES, JSON.stringify(keptRoutes, null, 2));
+    sendRes(res, 200, { note: remove ? `"${w}" no longer routes` : `"${w}" now sends the baton to ${roster.byName(to).name}${once ? ' (this meeting only)' : ''}` });
+  },
   // From an AI pane (meet-say): speak (big balloon) or murmur (small balloon, half volume); optionally pass the baton
   'POST /api/say': async (req, res) => {
     const { pane, text, pass, kind } = await json(req);

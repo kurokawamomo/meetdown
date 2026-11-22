@@ -6,6 +6,8 @@ Usage: meet-say "what to say"                      speak (normal voice, big ball
        meet-say --share <path-or-url> ["caption"]  show a file (html, pdf, png, jpg, svg) or a URL to everyone
        meet-say --scroll <0-100>                   scroll the shared page
        meet-say --unshare                          stop sharing
+       meet-say --route <word> <name> [--once]     from now on <word> sends the baton to <name> (--once: this meeting only)
+       meet-say --unroute <word>                   forget a route
 The speaker is identified by $TMUX_PANE; panes that are not participants are refused."""
 import json, os, sys, urllib.error, urllib.request
 
@@ -34,6 +36,10 @@ if args[:1] == ["--share"] and len(args) >= 2:
     post("/api/share", {**body, "caption": " ".join(args[2:])})
 elif args[:1] == ["--unshare"]:
     post("/api/share", {"stop": True})
+elif args[:1] == ["--route"] and len(args) >= 3:
+    post("/api/route", {"word": args[1], "to": args[2], "once": "--once" in args[3:]})
+elif args[:1] == ["--unroute"] and len(args) == 2:
+    post("/api/route", {"word": args[1], "remove": True})
 elif args[:1] == ["--scroll"] and len(args) == 2:
     post("/api/share", {"scroll": float(args[1])})
 else:
