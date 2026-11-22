@@ -78,25 +78,25 @@ export function createStage(root, { store, onDismiss, onShareClose, avatarFor, t
   const grid = div('grid');
 
   // presenting layout: the shared content (iframe or img) with a header pill and an optional caption
-  const shareHead = div('share-head', icon('present') + '<span class="share-title"></span>');
+  const shareHead = div('pres-head', icon('present') + '<span class="pres-title"></span>');
   const shareTitle = shareHead.lastChild;
   // Meet's controls on the shared content: unpin (it becomes one tile among the others) and close (for everyone)
   const sharePin = document.createElement('button');
   sharePin.type = 'button';
-  sharePin.className = 'share-btn share-pin';
+  sharePin.className = 'pres-btn pres-pin';
   sharePin.innerHTML = icon('pin');
   const shareClose = document.createElement('button');
   shareClose.type = 'button';
-  shareClose.className = 'share-btn share-close';
+  shareClose.className = 'pres-btn pres-close';
   shareClose.innerHTML = icon('close');
   shareHead.append(sharePin, shareClose);
   let pinned = true; // this viewer's choice; a new share is pinned again
   let pinnedFor = null;
   sharePin.addEventListener('click', (e) => { e.stopPropagation(); pinned = !pinned; render(); });
   shareClose.addEventListener('click', (e) => { e.stopPropagation(); if (onShareClose) onShareClose(); });
-  const shareFrame = div('share-frame');
-  const shareCaption = div('share-caption');
-  const shareEl = div('share');
+  const shareFrame = div('pres-frame');
+  const shareCaption = div('pres-caption');
+  const shareEl = div('pres');
   shareEl.hidden = true;
   shareEl.append(shareHead, shareFrame, shareCaption);
   root.append(empty, shareEl, grid);
@@ -314,7 +314,7 @@ export function createStage(root, { store, onDismiss, onShareClose, avatarFor, t
 
   // ---- layout ----
   function applyLayout() {
-    const n = tiles.size + (shareEl.classList.contains('share-tile') && !shareEl.hidden ? 1 : 0);
+    const n = tiles.size + (shareEl.classList.contains('pres-tile') && !shareEl.hidden ? 1 : 0);
     const W = root.clientWidth;
     const H = root.clientHeight;
     if (n !== lastCount) {
@@ -386,7 +386,7 @@ export function createStage(root, { store, onDismiss, onShareClose, avatarFor, t
     if (sh && sh.id !== pinnedFor) { pinnedFor = sh.id; pinned = true; }
     const asTile = !!sh && !pinned;
     root.classList.toggle('presenting', !!sh && pinned);
-    shareEl.classList.toggle('share-tile', asTile);
+    shareEl.classList.toggle('pres-tile', asTile);
     if (asTile && grid.lastChild !== shareEl) grid.append(shareEl); // last, so the participants keep their places
     if (!asTile && shareEl.parentNode !== root) root.insertBefore(shareEl, grid);
     shareEl.hidden = !sh;
