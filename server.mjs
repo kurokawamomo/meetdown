@@ -69,7 +69,7 @@ const cookieToken = (req) => ((req.headers.cookie || '').match(/(?:^|;\s*)meetdo
 const { sendToPane } = await import(pathToFileURL(PANE_MODULE).href);
 const send = (pane, text, opts = {}) => (DRY ? (log('dry-deliver', pane, text), Promise.resolve(true)) : sendToPane(pane, text, { log: (...a) => log('pane', ...a), ...opts }));
 const courier = createCourier({
-  send, sayPath: SAY, owner: OWNER, log,
+  send, sayPath: SAY, guidePath: path.join(ROOT, 'prompts/meeting.md'), owner: OWNER, log,
   // Undelivered messages leave a note in the minutes (not for shares, which retry on every tick)
   onFail: ({ kind, label, why }) => {
     if (kind === 'interim' || !meeting) return;
