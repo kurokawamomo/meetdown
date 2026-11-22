@@ -14,6 +14,9 @@ const hueOf = (s) => {
   for (const ch of String(s)) h = (h * 31 + ch.codePointAt(0)) % 360;
   return h;
 };
+const fill = (str, vars) => String(str).replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '');
+// ui key with an English fallback for a key the server config does not carry yet
+const textOr = (t, key, fallback) => { const v = t(key); return v && v !== key ? v : fallback; };
 const timeOf = (iso) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
@@ -51,7 +54,7 @@ export function createPanel(root, { store } = {}) {
   const schedule = () => { if (!raf) raf = requestAnimationFrame(render); };
 
   // ---- what an utterance looks like, as plain data (pure; the DOM is painted from it) ----
-  function describe(u, t) {
+  function describe(u, t, list) {
     const labelOf = (name) => (name === 'human' ? t('you') : name === 'system' ? t('meeting') : labels.get(name) || name);
     const time = timeOf(u.at);
     if (SYSTEM_LINE.includes(u.kind)) {
@@ -59,9 +62,19 @@ export function createPanel(root, { store } = {}) {
       const text = u.kind === 'no_reply' ? `${who}: ${u.text || ''}` : `${who} ${u.text || ''}`.trim();
       return { type: 'sys', text, time };
     }
+    if (u.kind === 'pass') {
+      const line = fill(textOr(t, 'passed', '{from} passed the baton to {to}'), { from: labelOf(u.from), to: (u.to || []).map(labelOf).join(', ') });
+      return { type: 'sys', text: u.text ? `${line}: ${u.text}` : line, time };
+    }
+    if (u.kind === 'interim') {
+      // the live line of a turn still in progress; once the final utterance of the human is in the log it is redundant
+      const done = list.some((x) => x.id > u.id && x.from === 'human' && (x.kind === 'voice' || x.kind === 'text'));
+      if (done) return { type: 'none' };
+      return { type: 'msg', kind: 'interim', human: true, hue: null, from: labelOf(u.from), to: '', tags: [], text: u.text || '', time };
+    }
     const to = (u.to || []).map(labelOf).join(', ');
     const tags = [];
-    if (u.aside) tags.push(['aside', t('aside')]);
+    if (u.kind === 'murmur') tags.push(['murmur', t('murmur')]);
     if (PLAY_TAGS.includes(u.play)) tags.push([u.play, t(u.play)]);
     const special = u.kind === 'share' || u.kind === 'summary';
     return {
@@ -79,6 +92,10 @@ export function createPanel(root, { store } = {}) {
 
   function paint(el, v) {
     el.replaceChildren();
+    if (v.type === 'none') {
+      el.className = 'm m-none';
+      return;
+    }
     if (v.type === 'sys') {
       el.className = 'm m-sys';
       el.append(node('span', 'm-sys-text', v.text), node('span', 'm-time', v.time));
@@ -138,10 +155,10 @@ export function createPanel(root, { store } = {}) {
         entries.set(u.id, rec);
         listEl.append(rec.el);
       }
-      if (rec.src === u && rec.env === env) continue;
+      if (u.kind !== 'interim' && rec.src === u && rec.env === env) continue; // an interim line depends on what came after it
       rec.src = u;
       rec.env = env;
-      const v = describe(u, t);
+      const v = describe(u, t, list);
       const sig = JSON.stringify(v);
       if (rec.sig !== sig) {
         rec.sig = sig;

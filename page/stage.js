@@ -1,6 +1,7 @@
 // stage.js: the tile grid. One tile per participant (kept across renders: only classes and attributes change),
-// a red down-triangle on focused tiles, a small faded one on loose matches, and a floating toolbar
-// (focus, aside, dismiss). Everything it needs is read from store.state.
+// a baton badge on the tiles that hold the baton, three balloon levels per tile (thought, murmur, speech),
+// a hover toolbar with "remove" (asks once), and Meet's presenting layout while store.state.share is set
+// (big shared area, tiles in a strip). Everything it needs is read from store.state.
 import { moodOf, createMoodTracker } from './avatar/mood.js';
 
 const MIN_TILE_H = 120;
@@ -8,16 +9,18 @@ const MIN_ASPECT = 0.5; // tiles may be tall (portrait) down to this width / hei
 const MAX_ASPECT = 1.8; // ... and wide up to this
 const TOOLS_MS = 4000;
 const SPEAKING_SCAN = 60;
+const MURMUR_MS = 6000;
+const SPEECH_LINES = 3;
+const SPEECH_IDLE_MS = 30000; // safety net: a speech balloon nobody cleared turns into its afterglow
+const fill = (str, vars) => String(str).replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '');
 
 const ICON = {
-  aside: '<path d="M9 9m-4 0a4 4 0 1 0 8 0 4 4 0 1 0-8 0M16.76 5.36l-1.68 1.69c.84 1.18.84 2.71 0 3.89l1.68 1.69c2.02-2.02 2.02-5.07 0-7.27zM20.07 2l-1.63 1.63c2.77 3.02 2.77 7.56 0 10.74L20.07 16c3.9-3.89 3.91-9.95 0-14zM9 13c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>',
-  focus: '<path d="M5.4 6.5h13.2c1.2 0 1.9 1.3 1.2 2.3l-6.6 9.6c-.6.9-1.8.9-2.4 0L4.2 8.8c-.7-1 0-2.3 1.2-2.3z"/>',
+  baton: '<path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>',
   dismiss: '<path d="M14 8c0-2.21-1.79-4-4-4S6 5.79 6 8s1.79 4 4 4 4-1.79 4-4zm3 6v-2h6v2h-6zM2 18v2h16v-2c0-2.66-5.33-4-8-4s-8 1.34-8 4z"/>',
   group: '<path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>',
+  present: '<path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/>',
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[name]}</svg>`;
-// Zelda-style target arrow: a rounded down-pointing triangle with a lighter facet on the left
-const TRIANGLE = '<svg viewBox="0 0 48 44" aria-hidden="true" focusable="false"><path d="M7 6h34L24 36z" fill="currentColor" stroke="currentColor" stroke-width="6" stroke-linejoin="round"/><path d="M12 9.5h11v19.5z" fill="#fff" opacity=".3"/></svg>';
 
 function div(cls, html) {
   const e = document.createElement('div');
@@ -64,22 +67,25 @@ function speakingNames(s) {
   return out;
 }
 
-// Loose matches belong to the latest human utterance; a newer one replaces them
-function maybeNames(list) {
-  for (let i = list.length - 1; i >= 0; i--) {
-    const u = list[i];
-    if (u.from === 'human' && (u.kind === 'voice' || u.kind === 'text')) return new Set(u.maybe || []);
-  }
-  return new Set();
-}
+const holdersOf = (b) => new Set(Array.isArray(b) ? b : (b && b.holders) || []);
 
-export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFor, talk } = {}) {
+export function createStage(root, { store, onDismiss, avatarFor, talk } = {}) {
   root.classList.add('stage');
   const empty = div('stage-empty', icon('group'));
   const grid = div('grid');
-  root.append(empty, grid);
+
+  // presenting layout: the shared content (iframe or img) with a header pill and an optional caption
+  const shareHead = div('share-head', icon('present') + '<span class="share-title"></span>');
+  const shareTitle = shareHead.lastChild;
+  const shareFrame = div('share-frame');
+  const shareCaption = div('share-caption');
+  const shareEl = div('share');
+  shareEl.hidden = true;
+  shareEl.append(shareHead, shareFrame, shareCaption);
+  root.append(empty, shareEl, grid);
 
   const tiles = new Map(); // participant name -> tile record
+  const bal = new Map(); // participant name -> balloon data { thought, murmur, murmurTimer, speech: [{id,text}], speechTimer }
   const tracker = createMoodTracker(); // surprise and nod windows; calls back when one opens and when it closes
   let raf = 0;
   let layoutKey = '';
@@ -87,14 +93,19 @@ export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFo
   let relayoutTimer = 0;
   let toolsTimer = 0;
   let pointerType = 'mouse';
+  let lineId = 0;
 
   const schedule = () => { if (!raf) raf = requestAnimationFrame(render); };
+  const uiText = (k) => {
+    const ui = (store.state && store.state.ui) || {};
+    return Object.keys(ui).length ? ui[k] ?? k : '';
+  };
 
   // ---- tile construction ----
   function makeTile(p) {
     const el = div('tile');
     el.dataset.name = p.name;
-    el.setAttribute('role', 'group'); // the buttons inside are the keyboard and screen-reader way in; a click anywhere on the tile is the pointer way
+    el.setAttribute('role', 'group'); // the toolbar button is the keyboard and screen-reader way in
     const glow = div('tile-glow');
     glow.setAttribute('aria-hidden', 'true');
     const bg = div('tile-bg');
@@ -108,23 +119,32 @@ export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFo
     subEl.className = 'label-sub';
     const label = div('label', '<span class="label-voice" aria-hidden="true"><i></i><i></i><i></i></span>');
     label.append(nameEl, chairEl, subEl);
-    const chip = div('aside-chip', icon('aside') + '<span></span>');
+    const baton = div('baton-badge', icon('baton'));
     const toolbar = div('toolbar');
     toolbar.setAttribute('role', 'toolbar');
-    const btns = {};
-    for (const act of ['aside', 'focus', 'dismiss']) { // focus sits in the middle: a second tap on the tile centre still toggles it
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'tb tb-' + act;
-      b.dataset.act = act;
-      b.innerHTML = icon(act);
-      btns[act] = b;
-      toolbar.append(b);
-    }
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'tb tb-dismiss';
+    dismiss.innerHTML = icon('dismiss');
+    toolbar.append(dismiss);
+    // one balloon is shown at a time: speech over murmur over thought
+    const thoughtText = document.createElement('span');
+    thoughtText.className = 'bln-text';
+    const thought = div('bln bln-thought');
+    thought.append(thoughtText, div('bln-dots', '<b></b><b></b>'));
+    const murmurText = document.createElement('span');
+    murmurText.className = 'bln-text';
+    const murmur = div('bln bln-murmur');
+    murmur.append(murmurText);
+    const lines = div('sp-lines');
+    const speech = div('bln bln-speech');
+    speech.append(lines);
+    const balloons = div('balloons');
+    balloons.append(thought, murmur, speech);
     const clip = div('tile-clip');
-    clip.append(bg, avatarHost, div('mark mark-focus', TRIANGLE), div('mark mark-maybe', TRIANGLE), div('voice', '<i></i><i></i><i></i>'), chip, label, toolbar);
+    clip.append(bg, avatarHost, balloons, div('voice', '<i></i><i></i><i></i>'), baton, label, toolbar);
     el.append(clip);
-    return { name: p.name, el, glow, avatarHost, avatar: null, avatarKey: null, nameEl, chairEl, subEl, chipText: chip.lastChild, btns, view: {} };
+    return { name: p.name, el, glow, avatarHost, avatar: null, avatarKey: null, nameEl, chairEl, subEl, baton, dismiss, balloons, thoughtText, murmurText, lines, view: {} };
   }
 
   function dropAvatar(rec) {
@@ -169,39 +189,102 @@ export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFo
     node.setAttribute(attr, value);
   };
 
+  // ---- balloons ----
+  const balOf = (name) => {
+    let b = bal.get(name);
+    if (!b) {
+      b = { thought: '', murmur: '', murmurTimer: 0, speech: [], glow: false, speechTimer: 0 };
+      bal.set(name, b);
+    }
+    return b;
+  };
+
+  function paintBalloons(rec) {
+    const b = bal.get(rec.name);
+    const thought = b ? b.thought : '';
+    const murmur = b ? b.murmur : '';
+    const speech = b ? b.speech : [];
+    // live speech, murmur, the afterglow of the last speech (faint, kept after the speaker finished), thought
+    const glow = !!(b && b.glow && speech.length);
+    const show = speech.length && !glow ? 'speech' : murmur ? 'murmur' : glow ? 'speech' : thought ? 'thought' : '';
+    if (rec.view.glow !== glow) {
+      rec.view.glow = glow;
+      if (glow) rec.balloons.dataset.glow = '1';
+      else delete rec.balloons.dataset.glow;
+    }
+    if (rec.view.show !== show) {
+      rec.view.show = show;
+      if (show) rec.balloons.dataset.show = show;
+      else delete rec.balloons.dataset.show;
+    }
+    setText(rec, 'thought', rec.thoughtText, thought);
+    setText(rec, 'murmur', rec.murmurText, murmur);
+    // speech lines are kept by id so a new line animates in and the older ones stay put and fade
+    const have = new Map([...rec.lines.children].map((c) => [Number(c.dataset.id), c]));
+    for (const [id, node] of have) if (!speech.some((l) => l.id === id)) node.remove();
+    for (const l of speech) {
+      if (have.has(l.id)) continue;
+      const p = document.createElement('p');
+      p.className = 'sp-line';
+      p.dataset.id = String(l.id);
+      p.textContent = l.text;
+      rec.lines.append(p);
+    }
+  }
+  const paintBalloonsOf = (name) => { const rec = tiles.get(name); if (rec) paintBalloons(rec); };
+
+  function showThought(name, text) {
+    balOf(name).thought = String(text || '').trim();
+    paintBalloonsOf(name);
+  }
+  function showMurmur(name, text) {
+    const b = balOf(name);
+    clearTimeout(b.murmurTimer);
+    b.murmur = String(text || '').trim();
+    if (b.murmur) b.murmurTimer = setTimeout(() => { b.murmur = ''; paintBalloonsOf(name); }, MURMUR_MS);
+    paintBalloonsOf(name);
+  }
+  function showSpeech(name, text) {
+    const b = balOf(name);
+    const line = String(text || '').trim();
+    if (!line) return;
+    if (b.glow) { b.speech = []; b.glow = false; } // the live balloon replaces the afterglow
+    b.speech = [...b.speech, { id: ++lineId, text: line }].slice(-SPEECH_LINES);
+    clearTimeout(b.speechTimer);
+    b.speechTimer = setTimeout(() => clearSpeech(name), SPEECH_IDLE_MS);
+    paintBalloonsOf(name);
+  }
+  function clearSpeech(name) {
+    const b = bal.get(name);
+    if (!b) return;
+    clearTimeout(b.speechTimer);
+    b.glow = b.speech.length > 0; // the text stays as a faint afterglow
+    paintBalloonsOf(name);
+  }
+
   function update(rec, p, ctx) {
     const { t, now } = ctx;
     const label = p.label || p.name;
     const sub = p.status === 'busy' || p.status === 'absent' ? t(p.status) : '';
-    const focused = ctx.focus.has(p.name);
-    const asideNext = ctx.aside.has(p.name);
+    const holds = ctx.baton.has(p.name);
     mountAvatar(rec, p);
     setText(rec, 'label', rec.nameEl, label);
     setText(rec, 'chair', rec.chairEl, p.chair ? t('chair') : '');
     setText(rec, 'sub', rec.subEl, sub);
-    setText(rec, 'chip', rec.chipText, t('asideNext'));
     setAttr(rec, 'aria', rec.el, 'aria-label', sub ? `${label}, ${sub}` : label);
     setAttr(rec, 'taste', rec.el, 'data-taste', p.taste || '');
-    setFlag(rec, 'is-focus', focused);
-    setFlag(rec, 'is-maybe', ctx.maybe.has(p.name));
-    setFlag(rec, 'is-aside', asideNext);
+    setAttr(rec, 'baton-tip', rec.baton, 'title', t('baton'));
+    setFlag(rec, 'is-baton', holds);
     setFlag(rec, 'is-speaking', ctx.speaking.has(p.name));
     setFlag(rec, 'is-away', p.status === 'absent');
-    for (const [act, tip] of [['focus', t('focus')], ['aside', t('aside')], ['dismiss', t('dismiss')]]) {
-      setAttr(rec, 'tip-' + act, rec.btns[act], 'aria-label', tip);
-      setAttr(rec, 'title-' + act, rec.btns[act], 'title', tip);
-    }
-    for (const [act, on] of [['focus', focused], ['aside', asideNext]]) {
-      if (rec.view['on-' + act] === on) continue;
-      rec.view['on-' + act] = on;
-      rec.btns[act].classList.toggle('on', on);
-      rec.btns[act].setAttribute('aria-pressed', String(on));
-    }
+    setAttr(rec, 'tip-dismiss', rec.dismiss, 'aria-label', t('dismiss'));
+    setAttr(rec, 'title-dismiss', rec.dismiss, 'title', t('dismiss'));
+    paintBalloons(rec);
 
     const mood = moodOf({
       status: p.status,
       speaking: ctx.speaking.has(p.name),
-      listening: ctx.talking && (focused || asideNext),
+      listening: ctx.talking && holds,
       ...tracker.windowsFor(p.name),
       now,
     });
@@ -218,7 +301,7 @@ export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFo
     const W = root.clientWidth;
     const H = root.clientHeight;
     if (n !== lastCount) {
-      if (lastCount > 0 && n > 0) {
+      if (lastCount > 0 && n > 0 && !root.classList.contains('presenting')) {
         root.classList.add('relayout');
         clearTimeout(relayoutTimer);
         relayoutTimer = setTimeout(() => root.classList.remove('relayout'), 320);
@@ -226,6 +309,7 @@ export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFo
       lastCount = n;
     }
     root.dataset.count = String(n);
+    if (root.classList.contains('presenting')) { layoutKey = ''; return; } // the strip is sized by CSS
     if (!n || !W || !H) return;
     const { cols, tw, th } = fit(n, W, H, parseFloat(getComputedStyle(grid).columnGap) || 12);
     const key = `${cols}/${tw}/${th}`;
@@ -236,6 +320,85 @@ export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFo
     root.dataset.cols = String(cols);
   }
 
+  // ---- presenting: the shared content ----
+  let media = null; // { kind: 'image'|'frame', id, el, src }
+  let lastTop = 0;
+  let lastScroll = null;
+
+  const bust = (sh) => {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(sh.src) || sh.src.startsWith('//')) return sh.src; // somebody else's page: do not change its address
+    return sh.src + (sh.src.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(sh.version ?? 0);
+  };
+  const external = (src) => /^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith('//');
+
+  function scrollFrame(percent, smooth) {
+    if (!media || media.kind !== 'frame') return;
+    try {
+      const win = media.el.contentWindow;
+      const doc = media.el.contentDocument;
+      if (!win || !doc || !doc.documentElement) return;
+      const max = Math.max(0, doc.documentElement.scrollHeight - win.innerHeight);
+      win.scrollTo({ top: (max * Math.min(100, Math.max(0, Number(percent) || 0))) / 100, behavior: smooth ? 'smooth' : 'auto' });
+    } catch (_) { /* a cross-origin page or a pdf viewer cannot be scrolled from here */ }
+  }
+  function restoreTop() {
+    try { media.el.contentWindow.scrollTo(0, lastTop); } catch (_) { /* cross-origin */ }
+  }
+  function makeMedia(sh) {
+    if (sh.kind === 'image') {
+      const img = document.createElement('img');
+      img.alt = '';
+      img.draggable = false;
+      return { kind: 'image', id: sh.id, el: img, src: '' };
+    }
+    const f = document.createElement('iframe');
+    f.title = 'share';
+    f.referrerPolicy = 'no-referrer';
+    if (external(sh.src)) f.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups'); // same-origin files stay scrollable
+    const m = { kind: 'frame', id: sh.id, el: f, src: '', ext: external(sh.src) };
+    f.addEventListener('load', () => {
+      const sc = store.state && store.state.scroll;
+      if (sc && sc.percent != null) scrollFrame(sc.percent, false);
+      else restoreTop();
+    });
+    return m;
+  }
+
+  function syncShare(s, t) {
+    const sh = s.share && s.share.src ? s.share : null;
+    root.classList.toggle('presenting', !!sh);
+    shareEl.hidden = !sh;
+    if (!sh) {
+      if (media) { media = null; shareFrame.replaceChildren(); }
+      lastScroll = null;
+      return;
+    }
+    const who = (s.participants || []).find((p) => p.name === sh.by);
+    const title = fill(t('sharing'), { name: (who && (who.label || who.name)) || sh.by || '', by: sh.by || '', label: sh.caption || '' });
+    if (shareTitle.textContent !== title) shareTitle.textContent = title;
+    const caption = sh.caption || '';
+    if (shareCaption.textContent !== caption) shareCaption.textContent = caption;
+    shareCaption.hidden = !caption;
+    const kind = sh.kind === 'image' ? 'image' : 'frame';
+    if (!media || media.kind !== kind || media.id !== sh.id || (kind === 'frame' && media.ext !== external(sh.src))) {
+      media = makeMedia(sh);
+      shareFrame.replaceChildren(media.el);
+      shareFrame.dataset.kind = kind;
+    }
+    const src = bust(sh);
+    if (media.src !== src) {
+      if (media.kind === 'frame') {
+        try { lastTop = media.el.contentWindow.scrollY || 0; } catch (_) { lastTop = 0; }
+      }
+      media.src = src;
+      media.el.src = src;
+    }
+    if (s.scroll !== lastScroll) {
+      lastScroll = s.scroll;
+      if (s.scroll && s.scroll.percent != null) scrollFrame(s.scroll.percent, true);
+    }
+  }
+
   // ---- render ----
   function render() {
     raf = 0;
@@ -243,14 +406,11 @@ export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFo
     const uiMap = s.ui || {};
     const hasUi = Object.keys(uiMap).length > 0;
     const t = (k) => (hasUi ? uiMap[k] ?? k : '');
-    const list = s.list || [];
     const people = s.participants || [];
     const ctx = {
       t,
       now: Date.now(),
-      focus: new Set(s.focus || []),
-      aside: new Set([].concat(s.aside || [])),
-      maybe: maybeNames(list),
+      baton: holdersOf(s.baton),
       speaking: speakingNames(s),
       talking: !!talk && !!talk.state && talk.state !== 'idle',
     };
@@ -272,12 +432,61 @@ export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFo
       rec.el.remove();
       tiles.delete(name);
       tracker.forget(name);
+      const b = bal.get(name);
+      if (b) { clearTimeout(b.murmurTimer); clearTimeout(b.speechTimer); bal.delete(name); }
     }
+    syncShare(s, t);
     applyLayout();
   }
 
   store.on('signal', (sig) => tracker.signal(sig));
   const offTracker = tracker.onChange(schedule);
+
+  // ---- dismiss: asks once ----
+  const overlays = document.getElementById('overlays') || document.body;
+  const confirmText = div('confirm-text');
+  confirmText.id = 'confirm-text';
+  const confirmNo = document.createElement('button');
+  confirmNo.type = 'button';
+  confirmNo.className = 'confirm-btn';
+  const confirmYes = document.createElement('button');
+  confirmYes.type = 'button';
+  confirmYes.className = 'confirm-btn confirm-yes';
+  const confirmActions = div('confirm-actions');
+  confirmActions.append(confirmNo, confirmYes);
+  const confirmBox = div('confirm');
+  confirmBox.setAttribute('role', 'alertdialog');
+  confirmBox.setAttribute('aria-modal', 'true');
+  confirmBox.setAttribute('aria-labelledby', 'confirm-text');
+  confirmBox.append(confirmText, confirmActions);
+  const confirmScrim = div('confirm-scrim');
+  confirmScrim.append(confirmBox);
+  overlays.append(confirmScrim);
+  let pendingDismiss = null;
+
+  function closeConfirm() {
+    pendingDismiss = null;
+    confirmScrim.classList.remove('show');
+  }
+  function askDismiss(name) {
+    const p = (store.state.participants || []).find((x) => x.name === name);
+    pendingDismiss = name;
+    confirmText.textContent = fill(uiText('dismissConfirm'), { name: (p && (p.label || p.name)) || name });
+    confirmNo.textContent = uiText('dismissNo');
+    confirmYes.textContent = uiText('dismissYes');
+    confirmScrim.classList.add('show');
+    confirmNo.focus({ preventScroll: true });
+  }
+  confirmYes.addEventListener('click', () => {
+    const name = pendingDismiss;
+    closeConfirm();
+    confirmYes.blur();
+    if (name && onDismiss) onDismiss(name);
+  });
+  confirmNo.addEventListener('click', () => { closeConfirm(); confirmNo.blur(); });
+  confirmScrim.addEventListener('pointerdown', (e) => { if (e.target === confirmScrim) closeConfirm(); });
+  const onKey = (e) => { if (e.key === 'Escape' && pendingDismiss) closeConfirm(); };
+  document.addEventListener('keydown', onKey);
 
   // ---- input ----
   const hideTools = () => {
@@ -289,11 +498,6 @@ export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFo
     el.classList.add('has-tools');
     toolsTimer = setTimeout(hideTools, TOOLS_MS);
   };
-  const act = (kind, name) => {
-    if (kind === 'focus' && onFocus) onFocus(name);
-    else if (kind === 'aside' && onAside) onAside(name);
-    else if (kind === 'dismiss' && onDismiss) onDismiss(name);
-  };
 
   const onPointerDown = (e) => {
     pointerType = e.pointerType || 'mouse';
@@ -304,16 +508,14 @@ export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFo
   grid.addEventListener('click', (e) => {
     const tile = e.target.closest('.tile');
     if (!tile) return;
-    const name = tile.dataset.name;
     const btn = e.target.closest('.tb');
     if (btn) {
       if (pointerType !== 'mouse') showTools(tile);
-      act(btn.dataset.act, name);
+      askDismiss(tile.dataset.name);
       if (e.detail) btn.blur(); // a focused button would also react to Space, which is the talk key
       return;
     }
-    if (pointerType !== 'mouse') showTools(tile); // touch: the first tap also floats the toolbar
-    act('focus', name);
+    if (pointerType !== 'mouse') showTools(tile); // touch: a tap floats the toolbar
   });
 
   // ---- wiring ----
@@ -330,12 +532,19 @@ export function createStage(root, { store, onFocus, onAside, onDismiss, avatarFo
 
   return {
     render: schedule,
+    showThought,
+    showMurmur,
+    showSpeech,
+    clearSpeech,
     destroy() {
       document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', applyLayout);
       if (ro) ro.disconnect();
       if (typeof unsubscribe === 'function') unsubscribe();
       offTracker();
+      for (const b of bal.values()) { clearTimeout(b.murmurTimer); clearTimeout(b.speechTimer); }
+      confirmScrim.remove();
       clearTimeout(toolsTimer);
       clearTimeout(relayoutTimer);
       if (raf) cancelAnimationFrame(raf);

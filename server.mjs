@@ -1,5 +1,5 @@
 // meetdown server: HTTP, page updates (SSE) and the wiring between the meeting parts in lib/.
-// The center is the utterance log (lib/meeting.mjs); who hears what is decided by lib/focus.mjs.
+// The center is the utterance log (lib/meeting.mjs). Everyone hears everything; the baton (lib/focus.mjs) says who answers by voice.
 // Listens on 127.0.0.1 only and answers nothing without the token.
 import http from 'node:http';
 import fs from 'node:fs';
@@ -9,7 +9,8 @@ import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Roster } from './lib/roster.mjs';
 import { Meeting } from './lib/meeting.mjs';
-import { resolve, findInvites } from './lib/focus.mjs';
+import { resolveBaton, findInvites } from './lib/focus.mjs';
+import { createThoughts } from './lib/thoughts.mjs';
 import { createCourier } from './lib/courier.mjs';
 import { createSpeech } from './lib/speech.mjs';
 import { summarize } from './lib/summary.mjs';
@@ -27,14 +28,14 @@ const UI = {
   invite: 'Add people', inviteTitle: 'Add a session', noOneToInvite: 'No session to add', more: 'More',
   taste: 'Avatar style', tastePixel: 'Pixel', tasteFlat: 'Flat', tasteSticker: 'Sticker', tasteGeo: 'Geometric', tasteMeet: 'Meet circles',
   leave: 'Leave', leaving: 'Ending the meeting in {seconds} s', back: 'Back', ended: 'The meeting has ended',
-  summary: 'Summary', summaryFailed: 'Could not summarize', focus: 'Focus', aside: 'Aside', dismiss: 'Remove',
-  asideNext: 'Next message only', minutes: 'Minutes', share: 'Shared', joined: 'joined', left: 'left',
+  summary: 'Summary', summaryFailed: 'Could not summarize', dismiss: 'Remove', minutes: 'Minutes', joined: 'joined', left: 'left',
+  baton: 'Baton', inviteAsk: 'Invite {name}?', inviteYes: 'Invite', inviteNo: 'Not now', dismissConfirm: 'Remove {name} from the meeting?',
+  dismissYes: 'Remove', dismissNo: 'Cancel', sharing: '{name} is presenting', passed: '{from} passed the baton to {to}', stopShare: 'Stop sharing', interim: 'Still talking', murmur: 'Murmur',
   noReply: 'No spoken reply', toggled: 'Recording (tap to send)', holding: 'Recording (release to send)',
   ...(CONFIG.ui || {}),
 };
 const fill = (s, v) => String(s).replace(/\{(\w+)\}/g, (_, k) => v[k] ?? '');
 const TASTES = ['pixel', 'flat', 'sticker', 'geo', 'meet'];
-const SHARE_MS = (CONFIG.shareMinutes ?? 2) * 60000;
 const GRACE_MS = (CONFIG.leaveGraceSeconds ?? 10) * 1000;
 // tmux-foxhound's pane delivery, found in whichever plugin marketplace has it installed
 const MARKETS = path.join(os.homedir(), '.claude/plugins/marketplaces');
@@ -45,9 +46,11 @@ const AUDIO = path.join(STATE, 'audio');
 const MEETINGS = path.join(ROOT, 'meetings');
 const PAGE_DIR = path.join(ROOT, 'page');
 const PREFS = path.join(STATE, 'prefs.json');
+const SHARES = path.join(STATE, 'share');
 const SAY = path.join(ROOT, 'bin/meet-say').replace(os.homedir(), '~');
 fs.mkdirSync(STATE, { recursive: true });
 fs.mkdirSync(MEETINGS, { recursive: true });
+fs.mkdirSync(SHARES, { recursive: true });
 
 const logFile = path.join(STATE, 'server.log');
 const log = (...a) => {
@@ -74,7 +77,7 @@ const courier = createCourier({
   send, sayPath: SAY, owner: OWNER, log,
   // Undelivered messages leave a note in the minutes (not for shares, which retry on every tick)
   onFail: ({ kind, label, why }) => {
-    if (kind === 'share' || !meeting) return;
+    if (kind === 'interim' || !meeting) return;
     note(why === 'no-pane' ? fill(UI.paneMissing, { name: label }) : fill(UI.gaveUp, { name: label, why }));
   },
 });
@@ -86,12 +89,20 @@ const roster = new Roster({
   voicePool: CONFIG.voicePool || [],
   defaultTaste: prefs.defaultTaste || CONFIG.defaultTaste || 'pixel',
 });
+// What each participant is doing right now, read from its Claude Code transcript (the "thought" balloon)
+const thoughts = createThoughts({ sessionsDir: path.join(os.homedir(), '.claude/sessions'), projectsDir: path.join(os.homedir(), '.claude/projects'), log });
+const thoughtText = new Map(); // name -> latest thought
+const voicedThought = new Map(); // name -> the thought text already spoken in a pause
+thoughts.on('thought', ({ name, text }) => { thoughtText.set(name, text); emit('thought', { name, text }); });
 
-// ---- Meeting state that lives outside the log: focus (Z-targeting), aside, share clock, awaited replies ----
+// ---- Meeting state that lives outside the log: baton holders, interim turns, invites waiting for a yes, screen share ----
 let meeting = null;
-let focus = [];
-let aside = null;
-let lastShareAt = 0;
+let baton = [];
+const turns = new Map(); // turn id -> { parts: Map(part -> text), u: live interim utterance }
+const askedInvites = new Set();
+let share = null;
+let shareVersion = 0;
+const murmurIds = new Set(); // utterance ids spoken at half volume
 const awaiting = new Map(); // name -> { since: id, sawBusy: boolean }
 
 const chairName = () => (roster.participants().find((p) => p.chair) || {}).name || null;
@@ -99,7 +110,9 @@ const inMeeting = (name) => roster.participants().some((p) => p.name === name);
 const labelOf = (name) => (roster.byName(name) || {}).label || name;
 const tasteOf = (p) => prefs.tastes[p.name] || prefs.defaultTaste || p.taste || CONFIG.defaultTaste || 'pixel';
 const publicParticipant = (p) => ({ name: p.name, label: p.label, status: p.status, chair: !!p.chair, taste: tasteOf(p), look: p.look || {}, address: p.address, title: p.title });
-const rosterPayload = () => ({ participants: roster.participants().map(publicParticipant), focus, aside });
+const rosterPayload = () => ({ participants: roster.participants().map(publicParticipant), baton });
+const emitRoster = () => { emit('roster', rosterPayload()); emit('baton', { holders: baton }); };
+const watchThoughts = () => thoughts.watch(roster.participants().map((p) => p.name));
 const entry = (fields) => ({ to: [], maybe: [], aside: false, ...fields });
 const note = (text) => meeting.append(entry({ kind: 'note', from: 'system', text }));
 
@@ -108,12 +121,15 @@ function openMeeting() {
   meeting.on('utterance', (u) => emit('utterance', u));
   meeting.on('state', (info) => emit('meeting', info));
   meeting.on('expire', () => endMeeting().catch((e) => log('end', e.stack || e.message)));
-  focus = [];
-  aside = null;
-  lastShareAt = Date.now();
+  baton = [];
+  turns.clear();
+  askedInvites.clear();
+  share = null;
+  murmurIds.clear();
   awaiting.clear();
   roster.poll();
   roster.reset(CONFIG.autoJoin || []);
+  watchThoughts();
   log('meeting open', meeting.info().id);
   emit('snapshot', snapshot());
 }
@@ -122,7 +138,7 @@ async function endMeeting() {
   if (!meeting || meeting.info().state !== 'leaving') return;
   meeting.setState('closing');
   const lines = meeting.list
-    .filter((u) => ['voice', 'text', 'say'].includes(u.kind) && u.text)
+    .filter((u) => ['voice', 'text', 'say', 'murmur'].includes(u.kind) && u.text && !u.thought)
     .map((u) => ({ label: u.from === 'human' ? OWNER : labelOf(u.from), text: u.text, aside: !!u.aside, kind: u.kind }));
   const text = lines.length ? await summarize({ meetingId: meeting.info().id, lines, claudeBin: CONFIG.claudeBin || 'claude' }) : null;
   if (text) {
@@ -144,7 +160,8 @@ function emit(type, data) {
 }
 const snapshot = () => ({
   meeting: meeting.info(), list: meeting.list, ...rosterPayload(), ui: UI, lang: CONFIG.lang || 'en',
-  overlap: CONFIG.overlapSeconds ?? 1, holdMs: CONFIG.holdMs ?? 300, tastes: TASTES, me: { owner: OWNER },
+  overlap: CONFIG.overlapSeconds ?? 1, holdMs: CONFIG.holdMs ?? 300, interimSeconds: CONFIG.interimSeconds ?? 15,
+  tastes: TASTES, me: { owner: OWNER }, share, thoughts: Object.fromEntries(thoughtText),
 });
 setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 15000).unref();
 
@@ -159,50 +176,56 @@ roster.on('change', () => {
       meeting.append(entry({ kind: 'no_reply', from: name, text: UI.noReply }));
     }
   }
-  emit('roster', rosterPayload());
+  watchThoughts();
+  emitRoster();
 });
 setInterval(() => roster.poll(), 3000).unref();
 
 // ---- Talking ----
-async function human(kind, raw) {
-  if (meeting.info().state !== 'open') return; // nothing reaches the panes while the meeting is ending
-  const text = raw.replace(/^\u300c([^\u300c\u300d]*)\u300d$/, '$1'); // whisper may wrap a Japanese sentence in corner brackets
-  // Sessions not in the meeting yet answer to their configured label and aliases too ("bring in <alias>")
+const unwrap = (raw) => raw.replace(/^\u300c([^\u300c\u300d]*)\u300d$/, '$1'); // whisper may wrap a Japanese sentence in corner brackets
+
+// A spoken "bring in X" only asks; the page shows a chip and the human confirms
+function askInvites(text) {
   const people = CONFIG.people || {};
   const others = roster.live().filter((s) => !inMeeting(s.name))
     .map((s) => ({ ...s, label: (people[s.name] || {}).label || s.title || s.name, aliases: (people[s.name] || {}).aliases || [] }));
-  for (const name of findInvites({ text, live: others, inviteWords: CONFIG.inviteWords || [], sessionReadings: CONFIG.sessionReadings || {} })) {
-    if (roster.join(name)) meeting.append(entry({ kind: 'join', from: name, text: UI.joined }));
-  }
-  const before = new Set(focus);
-  const usedAside = aside;
-  const r = resolve({
-    text, participants: roster.participants(), focus, chairName: chairName(),
-    everyoneWords: CONFIG.everyoneWords || [], sessionReadings: CONFIG.sessionReadings || {}, aside,
-  });
-  aside = null;
-  focus = r.focus;
-  const u = meeting.append(entry({ kind, from: 'human', to: r.to, maybe: r.maybe, aside: !!usedAside, text }));
-  for (const name of r.to) if (!before.has(name) || name === usedAside) emit('signal', { name, kind: 'called' });
-  emit('roster', rosterPayload());
-  const sent = await courier.deliver(meeting, roster, u, r.to);
-  for (const name of sent) awaiting.set(name, { since: u.id, sawBusy: false });
+  const names = findInvites({ text, live: others, inviteWords: CONFIG.inviteWords || [], sessionReadings: CONFIG.sessionReadings || {} })
+    .filter((n) => !askedInvites.has(n));
+  if (!names.length) return;
+  names.forEach((n) => askedInvites.add(n));
+  emit('inviteAsk', { names });
 }
 
-// ---- Share: every SHARE_MS, new utterances go to participants not in focus ----
-setInterval(async () => {
-  if (!meeting || meeting.info().state !== 'open' || Date.now() - lastShareAt < SHARE_MS) return;
-  const fresh = meeting.list.filter((u) => ['voice', 'text', 'say'].includes(u.kind) && Date.parse(u.at) > lastShareAt);
-  if (!fresh.length) return;
-  lastShareAt = Date.now();
-  const names = roster.participants().filter((p) => !focus.includes(p.name) && p.status !== 'absent').map((p) => p.name);
-  if (!names.length) return;
-  const sent = await courier.share(meeting, roster, names);
-  if (!sent.length) return;
-  const digest = fresh.slice(-10).map((u) => `${u.from === 'human' ? OWNER : labelOf(u.from)}: ${u.text}`).join(' / ');
-  meeting.append(entry({ kind: 'share', from: 'system', to: sent, text: digest }));
+async function human(kind, raw) {
+  if (meeting.info().state !== 'open') return; // nothing reaches the panes while the meeting is ending
+  const text = unwrap(raw);
+  askInvites(text);
+  const r = resolveBaton({
+    text, participants: roster.participants(), holders: baton, chairName: chairName(),
+    everyoneWords: CONFIG.everyoneWords || [], sessionReadings: CONFIG.sessionReadings || {},
+  });
+  baton = r.holders;
+  const u = meeting.append(entry({ kind, from: 'human', to: baton, maybe: r.maybe, text }));
+  for (const name of r.named) emit('signal', { name, kind: 'called' });
+  emitRoster();
+  const sent = await courier.broadcast(meeting, roster, u, baton);
+  for (const name of sent.filter((n) => baton.includes(n))) awaiting.set(name, { since: u.id, sawBusy: false });
+}
+
+// One recording piece of a long turn: show it live and tell everyone that the human is still talking
+async function interimPart(turnId, part, text) {
+  const t = turns.get(turnId) || { parts: new Map(), u: null };
+  turns.set(turnId, t);
+  if (!text) return;
+  t.parts.set(part, unwrap(text));
+  const sofar = [...t.parts.keys()].sort((a, b) => a - b).map((k) => t.parts.get(k)).join(' ');
+  if (t.u) meeting.update(t.u, { text: sofar });
+  else t.u = meeting.append(entry({ kind: 'interim', from: 'human', text: sofar, turn: turnId }));
+  emit('interim', { turn: turnId, part, text: unwrap(text), at: new Date().toISOString() });
+  askInvites(text);
+  const sent = await courier.interim(meeting, roster, unwrap(text), turnId);
   for (const name of sent) emit('signal', { name, kind: 'shared' });
-}, 10000).unref();
+}
 
 // VOICEVOX reads a space as a pause, so drop spaces next to Japanese text (kana, kanji, full-width forms) before speaking.
 // The minutes keep the original text.
@@ -213,7 +236,9 @@ const forSpeech = (text) => text.replace(SPACE_NEAR_JA, '');
 // ---- Speech output ----
 speech.on('audio', (m) => {
   const u = meeting.list.find((x) => x.id === m.id);
-  if (u && (u.play === 'queued' || u.play === 'playing')) emit('audio', { id: m.id, seq: m.seq, url: '/audio/' + m.file, gap: m.gap, last: m.last, from: u.from });
+  if (u && (u.play === 'queued' || u.play === 'playing')) {
+    emit('audio', { id: m.id, seq: m.seq, url: '/audio/' + m.file, gap: m.gap, last: m.last, from: u.from, text: m.text || '', murmur: murmurIds.has(m.id) });
+  }
 });
 speech.on('error', (m) => {
   const u = meeting.list.find((x) => x.id === m.id);
@@ -235,7 +260,7 @@ const sendRes = (res, code, body, type = 'application/json; charset=utf-8') => {
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 };
 const ok = (res) => sendRes(res, 200, { ok: true });
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg' };
+const TYPES = { '.pdf': 'application/pdf', '.md': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.jpeg': 'image/jpeg', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg' };
 
 const routes = {
   // Pressed: start loading whisper, stop the voice being played and drop the rest
@@ -257,13 +282,23 @@ const routes = {
   },
   'POST /api/cancel': async (req, res) => { speech.cancel(); ok(res); },
   // Released: transcribe the recording and deliver it
+  // Released, or one piece of a long turn (?turn=&part=&final=): transcribe it; pieces are broadcast as interim text
   'POST /api/talk': async (req, res) => {
+    const url = new URL(req.url, 'http://x');
+    const turnId = url.searchParams.get('turn');
+    const part = Number(url.searchParams.get('part') || 0);
+    const final = !turnId || url.searchParams.get('final') === '1';
     const r = await speech.transcribe(await read(req, speech.maxAudio));
     if (r.error) { emit('note', { text: r.error }); return sendRes(res, 200, { error: r.error }); }
     const text = (r.text || '').trim();
-    if (!text) { emit('note', { text: UI.unheard }); return sendRes(res, 200, { text: '' }); }
     sendRes(res, 200, { text, ms: r.ms });
-    await human('voice', text);
+    if (!final) return interimPart(turnId, part, text);
+    const t = turnId && turns.get(turnId);
+    if (t && text) t.parts.set(part, unwrap(text));
+    const full = t ? [...t.parts.keys()].sort((a, b) => a - b).map((k) => t.parts.get(k)).join(' ') : text;
+    if (t) { if (t.u) meeting.update(t.u, { done: true }); turns.delete(turnId); }
+    if (!full) return emit('note', { text: UI.unheard });
+    await human('voice', full);
   },
   'POST /api/text': async (req, res) => {
     const text = String((await json(req)).text || '').trim();
@@ -277,19 +312,31 @@ const routes = {
     if (u && (next[u.play] || []).includes(state)) meeting.update(u, { play: state });
     ok(res);
   },
-  // Z-targeting: toggle one participant in the focus set
-  'POST /api/focus': async (req, res) => {
+  // A spoken invite was confirmed or declined on the page
+  'POST /api/invite-confirm': async (req, res) => {
     const { name } = await json(req);
-    if (inMeeting(name)) focus = focus.includes(name) ? focus.filter((n) => n !== name) : [...focus, name];
-    emit('roster', rosterPayload());
+    askedInvites.delete(name);
+    const p = inMeeting(name) ? null : roster.join(name);
     ok(res);
+    if (p) {
+      meeting.append(entry({ kind: 'join', from: name, text: UI.joined }));
+      watchThoughts();
+      emitRoster();
+      await courier.greet(meeting, roster, p);
+    }
   },
-  // One-shot aside for the next human utterance; focus stays as it is
-  'POST /api/aside': async (req, res) => {
+  'POST /api/invite-decline': async (req, res) => { const { name } = await json(req); if (name) askedInvites.delete(name); else askedInvites.clear(); ok(res); },
+  // Speak a participant's latest thought in a pause of the human (once per thought text, half volume)
+  'POST /api/thought-voice': async (req, res) => {
     const { name } = await json(req);
-    if (inMeeting(name)) aside = aside === name ? null : name;
-    emit('roster', rosterPayload());
+    const p = roster.byName(name);
+    const text = thoughtText.get(name);
     ok(res);
+    if (!p || !inMeeting(name) || !text || voicedThought.get(name) === text) return;
+    voicedThought.set(name, text);
+    const u = meeting.append(entry({ kind: 'murmur', from: name, text, thought: true, play: 'queued' }));
+    murmurIds.add(u.id);
+    speech.speak(u.id, forSpeech(text), p.voice, p.style);
   },
   'GET /api/live': async (req, res) => sendRes(res, 200, roster.live().filter((s) => !inMeeting(s.name))),
   'POST /api/invite': async (req, res) => {
@@ -298,7 +345,8 @@ const routes = {
     ok(res);
     if (p) {
       meeting.append(entry({ kind: 'join', from: name, text: UI.joined }));
-      emit('roster', rosterPayload());
+      emitRoster();
+      watchThoughts();
       await courier.greet(meeting, roster, p);
     }
   },
@@ -308,11 +356,11 @@ const routes = {
     ok(res);
     if (p && inMeeting(name)) {
       roster.leave(name);
-      focus = focus.filter((n) => n !== name);
-      if (aside === name) aside = null;
+      baton = baton.filter((n) => n !== name);
+      watchThoughts();
       awaiting.delete(name);
       meeting.append(entry({ kind: 'leave', from: name, text: UI.left }));
-      emit('roster', rosterPayload());
+      emitRoster();
       await courier.dismiss(meeting, p);
     }
   },
@@ -323,22 +371,53 @@ const routes = {
     if (TASTES.includes(taste)) {
       if (name === '*') { prefs.defaultTaste = taste; prefs.tastes = {}; } else prefs.tastes[name] = taste;
       savePrefs();
-      emit('roster', rosterPayload());
+      emitRoster();
     }
     ok(res);
   },
-  // From an AI pane (meet-say): speak it in the meeting
+  // From an AI pane (meet-say): speak (big balloon) or murmur (small balloon, half volume); optionally pass the baton
   'POST /api/say': async (req, res) => {
-    const { pane, text, pass } = await json(req);
+    const { pane, text, pass, kind } = await json(req);
     const p = roster.byPane(pane);
     if (!p || !inMeeting(p.name) || meeting.info().state === 'closed') return sendRes(res, 403, 'this pane is not a participant of the meeting', 'text/plain; charset=utf-8');
     const t = String(text || '').trim();
     if (!t) return sendRes(res, 400, 'nothing to say', 'text/plain; charset=utf-8');
     awaiting.delete(p.name);
-    const u = meeting.append(entry({ kind: 'say', from: p.name, text: t, play: 'queued' }));
-    if (pass && p.chair && inMeeting(pass)) { focus = [pass]; emit('roster', rosterPayload()); }
+    const murmur = kind === 'murmur';
+    const u = meeting.append(entry({ kind: murmur ? 'murmur' : 'say', from: p.name, text: t, play: 'queued' }));
+    if (murmur) { murmurIds.add(u.id); emit('murmur', { name: p.name, id: u.id, text: t }); }
     speech.speak(u.id, forSpeech(t), p.voice, p.style);
-    sendRes(res, 200, { note: `spoken in the meeting (utterance ${u.id})` });
+    sendRes(res, 200, { note: `${murmur ? 'murmured' : 'spoken'} in the meeting (utterance ${u.id})` });
+    if (pass && inMeeting(pass) && pass !== p.name) {
+      baton = [pass];
+      meeting.append(entry({ kind: 'pass', from: p.name, to: [pass], text: t }));
+      emitRoster();
+      emit('signal', { name: pass, kind: 'called' });
+      await courier.passed(meeting, roster, p.name, pass, t);
+    }
+  },
+  // From an AI pane (meet-say --share/--unshare/--scroll): show a file or a URL to everyone
+  'POST /api/share': async (req, res) => {
+    const { pane, path: file, url: link, caption = '', scroll, stop } = await json(req);
+    const p = roster.byPane(pane);
+    if (!p || !inMeeting(p.name)) return sendRes(res, 403, 'this pane is not a participant of the meeting', 'text/plain; charset=utf-8');
+    if (stop) { share = null; emit('share', null); return sendRes(res, 200, { note: 'stopped sharing' }); }
+    if (typeof scroll === 'number') { emit('scroll', { percent: Math.max(0, Math.min(100, scroll)) }); return sendRes(res, 200, { note: `scrolled to ${scroll}%` }); }
+    let src, kindOf;
+    if (link && /^https?:\/\//.test(link)) { src = link; kindOf = 'url'; }
+    else if (file && fs.existsSync(file) && fs.statSync(file).isFile()) {
+      const ext = path.extname(file).toLowerCase();
+      if (!TYPES[ext] || ['.js', '.css'].includes(ext)) return sendRes(res, 400, 'cannot share this file type', 'text/plain; charset=utf-8');
+      const id = crypto.createHash('sha1').update(file).digest('hex').slice(0, 12);
+      fs.copyFileSync(file, path.join(SHARES, id + ext));
+      kindOf = ext === '.pdf' ? 'pdf' : ['.png', '.jpg', '.jpeg', '.svg'].includes(ext) ? 'image' : 'html';
+      src = `/share/${id}${ext}`;
+    } else return sendRes(res, 400, 'give an existing file path or an http(s) URL', 'text/plain; charset=utf-8');
+    shareVersion += 1;
+    share = { id: shareVersion, kind: kindOf, src: kindOf === 'url' ? src : `${src}?v=${shareVersion}`, caption, version: shareVersion, by: p.name };
+    emit('share', share);
+    meeting.append(entry({ kind: 'share', from: p.name, text: caption || path.basename(file || link) }));
+    sendRes(res, 200, { note: 'sharing' });
   },
 };
 
@@ -361,6 +440,11 @@ const server = http.createServer(async (req, res) => {
       clients.add(res);
       req.on('close', () => clients.delete(res));
       return;
+    }
+    const shared = url.pathname.match(/^\/share\/([0-9a-f]{12}\.[a-z]+)$/);
+    if (req.method === 'GET' && shared) {
+      const f = path.join(SHARES, shared[1]);
+      return fs.existsSync(f) ? sendRes(res, 200, fs.readFileSync(f), TYPES[path.extname(f)] || 'application/octet-stream') : sendRes(res, 404, 'not found', 'text/plain');
     }
     const audio = url.pathname.match(/^\/audio\/(\d+-\d+\.wav)$/);
     if (req.method === 'GET' && audio) {

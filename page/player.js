@@ -3,16 +3,25 @@
 // changes, the next voice may start `overlap` seconds before the previous one ends. While the human is
 // recording (hold) nothing new is scheduled. stopAll() reports what the human interrupted.
 //
-// Beyond the contract: hold(on) and reset(). `overlap` may be a number or a function returning one.
+// Murmurs (audio with murmur: true) play on their own track at 50% gain, one at a time. While the human records
+// they are held, and released only while setPaused(true) (a detected pause) or after the recording ended; a murmur
+// that has started may finish. A murmur starts only while no normal voice is audible, so at most two voices
+// sound at once. expectFront(n) puts the next n murmur utterances ahead of the queued ones.
+// Text for the balloons: onSentence(from, text, id) when a sentence of normal speech starts, onClear(from, id)
+// when the utterance ends or is cut, onMurmur(id, from, text) when a murmur sentence starts.
+//
+// Beyond the contract: hold(on), setPaused(on), expectFront(n) and reset(). `overlap` may be a number or a function returning one.
 // onPlay(id, from) fires when the first sentence of an utterance becomes audible (not when it is queued),
 // onDone(id) when its last sentence has finished, onSpeaking(names) whenever the set of audible
 // speakers changes (two speakers are audible while their voices overlap; the newest is last).
 
 const TICK_MS = 50;
 const FETCH_TIMEOUT_MS = 15000;
+const MURMUR_GAIN = 0.5;
+const FRONT_EXPIRE_MS = 4000;
 const HEARD_IN_PART_SEC = 10; // a half-heard utterance still counts as "playing" this long after a sentence ended
 
-export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, env = {} } = {}) {
+export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSentence, onClear, onMurmur, env = {} } = {}) {
   let ctx = null;
   let held = false; // the human is recording: nothing new is scheduled
   let pumping = false;
@@ -24,7 +33,12 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, env = {}
   const waiting = []; // arrived, not scheduled yet
   const items = []; // scheduled sentences, including ones that start later
   const between = new Map(); // utterance id -> { seq, at }: heard in part, sentence `seq` is next
-  const announced = new Set(); // utterances onPlay has fired for
+  const announced = new Map(); // utterances onPlay has fired for: id -> from
+  const mwaiting = []; // murmur sentences, arrived and not played yet
+  let mplaying = null; // the murmur sentence sounding now
+  let mpumping = false;
+  let paused = false; // a pause in the human's speech was detected
+  let front = { count: 0, ids: new Set(), until: 0 };
 
   const every = env.setInterval || ((fn, ms) => setInterval(fn, ms));
   const stopEvery = env.clearInterval || ((id) => clearInterval(id));
@@ -44,13 +58,14 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, env = {}
       const Ctor = env.AudioContext || (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext));
       if (!Ctor) return;
       try { ctx = new Ctor(); } catch (e) { return console.error(e); }
-      ctx.onstatechange = () => { tick(); pump(); };
+      ctx.onstatechange = () => { tick(); pump(); pumpMurmurs(); };
     }
     if (ctx.state !== 'running') {
       const p = ctx.resume();
       if (p && typeof p.then === 'function') p.then(() => { tick(); pump(); }, () => {});
     }
     pump(); // audio that arrived before the first gesture
+    pumpMurmurs();
   }
 
   const decode = (raw) => new Promise((ok, ng) => {
@@ -68,8 +83,9 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, env = {}
   // a: { id, seq, url, gap, last, from }
   function enqueue(a) {
     if (!a || silenced.has(a.id)) return;
+    if (a.murmur) return enqueueMurmur(a);
     const ctrl = new AbortController();
-    waiting.push({ id: a.id, seq: a.seq, from: a.from, gap: Number(a.gap) || 0, last: !!a.last, ctrl, raw: fetchRaw(a.url, ctrl), loaded: false, audio: null });
+    waiting.push({ id: a.id, seq: a.seq, from: a.from, text: a.text || '', gap: Number(a.gap) || 0, last: !!a.last, ctrl, raw: fetchRaw(a.url, ctrl), loaded: false, audio: null });
     pump();
   }
 
@@ -90,7 +106,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, env = {}
         waiting.shift();
         if (silenced.has(a.id)) continue;
         if (!a.audio) { // could not load: skip the sentence, but still close the utterance
-          if (a.last) { between.delete(a.id); announced.delete(a.id); call(onDone, a.id); }
+          if (a.last) { between.delete(a.id); finishUtterance(a.id, a.from); call(onDone, a.id); }
           continue;
         }
         schedule(a, a.audio);
@@ -106,7 +122,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, env = {}
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.connect(ctx.destination);
-    const it = { id: a.id, seq: a.seq, from: a.from, last: a.last, src, start: at, end: at + buf.duration, started: false };
+    const it = { id: a.id, seq: a.seq, from: a.from, text: a.text, last: a.last, src, start: at, end: at + buf.duration, started: false };
     src.onended = () => ended(it);
     src.start(at);
     items.push(it);
@@ -120,7 +136,14 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, env = {}
     it.started = true;
     if (silenced.has(it.id)) return;
     between.delete(it.id);
-    if (!announced.has(it.id)) { announced.add(it.id); call(onPlay, it.id, it.from); }
+    if (!announced.has(it.id)) { announced.set(it.id, it.from); call(onPlay, it.id, it.from); }
+    call(onSentence, it.from, it.text, it.id);
+  }
+
+  // The utterance is over (or cut): its balloon goes
+  function finishUtterance(id, from) {
+    const was = announced.delete(id);
+    if (was) call(onClear, from, id);
   }
 
   function ended(it) {
@@ -130,7 +153,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, env = {}
     detach(it);
     if (!it.started) markStarted(it);
     if (!silenced.has(it.id)) {
-      if (it.last) { between.delete(it.id); announced.delete(it.id); call(onDone, it.id); }
+      if (it.last) { between.delete(it.id); finishUtterance(it.id, it.from); call(onDone, it.id); }
       else between.set(it.id, { seq: it.seq + 1, at: ctx.currentTime });
     }
     tick();
@@ -161,7 +184,8 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, env = {}
     const names = [...new Set(audible().map((it) => it.from))];
     const key = names.join('\n');
     if (key !== spoken) { spoken = key; call(onSpeaking, names); }
-    if (!items.length && timer) { stopEvery(timer); timer = null; }
+    if (mwaiting.length) pumpMurmurs();
+    if (!items.length && !mplaying && !mwaiting.length && timer) { stopEvery(timer); timer = null; }
   }
 
   function speakingFrom() {
@@ -189,7 +213,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, env = {}
     for (const id of between.keys()) silenced.add(id);
     if (playing) { silenced.add(playing.id); pending.delete(playing.id); }
     between.clear();
-    announced.clear();
+    for (const [id, from] of [...announced]) finishUtterance(id, from);
     nextAt = 0;
     lastFrom = null;
     tick();
@@ -199,24 +223,102 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, env = {}
   // The server marked an utterance cut or dropped: its audio must not play
   function silence(id) {
     silenced.add(id);
+    for (let i = mwaiting.length - 1; i >= 0; i--) if (mwaiting[i].id === id) { mwaiting[i].ctrl.abort(); mwaiting.splice(i, 1); }
     for (let i = waiting.length - 1; i >= 0; i--) if (waiting[i].id === id) { waiting[i].ctrl.abort(); waiting.splice(i, 1); }
     for (let i = items.length - 1; i >= 0; i--) if (items[i].id === id) { kill(items[i]); items.splice(i, 1); }
     between.delete(id);
-    announced.delete(id);
+    const from = announced.get(id);
+    if (from !== undefined) finishUtterance(id, from);
     tick();
+  }
+
+  // ---- Murmurs ----
+  const murmurAllowed = () => !held || paused;
+
+  function enqueueMurmur(a) {
+    const ctrl = new AbortController();
+    const m = { id: a.id, seq: a.seq, from: a.from, text: a.text || '', ctrl, raw: fetchRaw(a.url, ctrl), loaded: false, audio: null };
+    const now = Date.now();
+    if (front.count > 0 && now > front.until) front = { count: 0, ids: new Set(), until: 0 };
+    let at = mwaiting.length;
+    if (front.ids.has(a.id)) { // a thought that was asked for goes after the earlier ones of its kind, before the rest
+      at = 0;
+      while (at < mwaiting.length && front.ids.has(mwaiting[at].id)) at++;
+    } else if (front.count > 0) {
+      front.ids.add(a.id);
+      front.count--;
+      at = 0;
+      while (at < mwaiting.length && front.ids.has(mwaiting[at].id)) at++;
+    }
+    mwaiting.splice(at, 0, m);
+    pumpMurmurs();
+  }
+
+  // Next n murmur utterances to arrive (for example the voiced thoughts) play before the queued ones
+  function expectFront(n) {
+    front = { count: Math.max(0, n | 0), ids: new Set(), until: Date.now() + FRONT_EXPIRE_MS };
+  }
+
+  async function pumpMurmurs() {
+    if (mpumping || !ctx) return;
+    mpumping = true;
+    try {
+      while (mwaiting.length && !mplaying && murmurAllowed()) {
+        const m = mwaiting[0];
+        if (!m.loaded) {
+          const raw = await m.raw;
+          m.audio = raw ? await decode(raw).catch(() => null) : null;
+          m.loaded = true;
+        }
+        if (mwaiting[0] !== m) continue;
+        if (!murmurAllowed() || audible().length) break; // tick() tries again
+        mwaiting.shift();
+        if (silenced.has(m.id) || !m.audio) continue;
+        playMurmur(m);
+      }
+    } finally {
+      mpumping = false;
+    }
+  }
+
+  function playMurmur(m) {
+    const src = ctx.createBufferSource();
+    const gain = ctx.createGain();
+    gain.gain.value = MURMUR_GAIN;
+    src.buffer = m.audio;
+    src.connect(gain);
+    gain.connect(ctx.destination);
+    mplaying = { src, gain };
+    src.onended = () => {
+      try { src.disconnect(); gain.disconnect(); } catch (_) {}
+      mplaying = null;
+      tick();
+      pumpMurmurs();
+    };
+    src.start();
+    if (!timer) timer = every(tick, TICK_MS);
+    call(onMurmur, m.id, m.from, m.text);
+  }
+
+  // The human paused (true) or went on talking (false): murmurs are released during a pause
+  function setPaused(on) {
+    paused = !!on;
+    if (paused) pumpMurmurs();
   }
 
   // Block (true) or allow (false) putting new sentences on the timeline; arrivals still download
   function hold(on) {
     held = !!on;
-    if (!held) pump();
+    if (!held) { pump(); pumpMurmurs(); }
   }
 
   // A new meeting restarts utterance ids: forget everything, including the silenced ids
   function reset() {
     stopAll();
+    for (const m of mwaiting.splice(0)) m.ctrl.abort();
+    front = { count: 0, ids: new Set(), until: 0 };
     silenced.clear();
   }
 
-  return { unlock, enqueue, stopAll, speakingFrom, silence, hold, reset };
+  return { unlock, enqueue, stopAll, speakingFrom, silence, hold, setPaused, expectFront, reset };
 }

@@ -64,7 +64,7 @@ def main():
                 name = f"{uid}-{i}.wav"
                 write_wav(os.path.join(OUT, name), pcm)
                 last = i == len(chunks) - 1
-                tell({"id": uid, "seq": i, "file": name, "sec": round(len(pcm) / 2 / SR, 3), "gap": gap(c, last), "last": last})
+                tell({"id": uid, "seq": i, "file": name, "sec": round(len(pcm) / 2 / SR, 3), "gap": gap(c, last), "last": last, "text": c})
             tell({"id": uid, "done": True})
         except Exception as e:
             tell({"id": uid, "error": str(e)})

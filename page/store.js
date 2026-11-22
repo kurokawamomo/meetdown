@@ -3,12 +3,14 @@
 //              rather than edited, so a changed field is a new reference.
 //   subscribe: fn(state) after every state change, batched to one call per animation frame
 //   on:        fn(data) for each server event, right when it arrives (not batched), after state was updated.
-//              Types: snapshot utterance roster meeting summary audio stop note signal, plus
+//              Types: snapshot utterance roster meeting summary audio stop note signal thought murmur inviteAsk
+//              baton share scroll interim, plus
 //              'connected' and 'disconnected' for the stream itself.
 // Beyond the contract: state.connected, close(), and patch(fields) for fields the page itself owns
 // (app.js keeps `speaking`, the names whose voice is audible; a snapshot never clears them).
 
-const EVENT_TYPES = ['snapshot', 'utterance', 'roster', 'meeting', 'summary', 'audio', 'stop', 'note', 'signal'];
+const EVENT_TYPES = ['snapshot', 'utterance', 'roster', 'meeting', 'summary', 'audio', 'stop', 'note', 'signal', 'thought', 'murmur', 'inviteAsk', 'baton', 'share', 'scroll', 'interim'];
+const MAX_TURNS = 5; // live turns kept in state.interim
 const CLOSED = 2; // EventSource.readyState: the browser gave up and will not reconnect by itself
 const FLUSH_FALLBACK_MS = 100; // background tabs do not run animation frames
 
@@ -16,8 +18,11 @@ const FLUSH_FALLBACK_MS = 100; // background tabs do not run animation frames
 const serverDefaults = () => ({
   meeting: null,
   participants: [],
-  focus: [],
-  aside: null,
+  baton: [], // names of the participants expected to answer by voice
+  share: null, // { id, kind, src, caption, version, by } or null
+  scroll: null, // { percent } of the last scroll event
+  interim: {}, // live text of the turns being spoken: { [turn]: { text, parts: { [n]: text }, at } }
+  interimSeconds: 15,
   list: [],
   ui: {},
   lang: 'en',
@@ -69,8 +74,19 @@ export function createStore(url = '/events', env = {}) {
     },
     roster(d) {
       if (d.participants) state.participants = d.participants;
-      if ('focus' in d) state.focus = d.focus || [];
-      if ('aside' in d) state.aside = d.aside || null;
+    },
+    baton(d) { state.baton = (d && d.holders) || []; },
+    share(d) { state.share = d && d.src ? d : null; },
+    scroll(d) { state.scroll = d || null; },
+    interim(d) {
+      if (!d || d.turn == null) return;
+      const prev = state.interim[d.turn];
+      const parts = { ...(prev ? prev.parts : {}), [d.part ?? 0]: d.text || '' };
+      const text = Object.keys(parts).map(Number).sort((a, b) => a - b).map((k) => parts[k]).filter(Boolean).join(' ');
+      const next = { ...state.interim, [d.turn]: { text, parts, at: d.at || null } };
+      const turns = Object.keys(next);
+      for (const t of turns.slice(0, Math.max(0, turns.length - MAX_TURNS))) delete next[t]; // oldest first
+      state.interim = next;
     },
     meeting(m) { state.meeting = m; },
     summary(d) { state.summary = d.text ?? null; },

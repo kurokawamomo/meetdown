@@ -19,7 +19,7 @@ const RING = 339.3; // circumference of the countdown ring (r = 54)
 const GRACE_FALLBACK_MS = 10000;
 const FALLBACK_TASTES = ['pixel', 'meet'];
 // ui keys this module renders; a changed value anywhere in this list re-applies the texts
-const UI_KEYS = ['talk', 'placeholder', 'send', 'invite', 'inviteTitle', 'more', 'taste', 'leave', 'back', 'summary', 'minutes', 'holding', 'toggled'];
+const UI_KEYS = ['talk', 'placeholder', 'send', 'invite', 'inviteTitle', 'more', 'taste', 'leave', 'back', 'summary', 'minutes', 'holding', 'toggled', 'inviteAsk', 'inviteYes', 'inviteNo'];
 
 function el(tag, cls, html) {
   const e = document.createElement(tag);
@@ -99,7 +99,14 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
 
   const toast = el('div', 'toast');
   toast.setAttribute('role', 'status');
-  root.append(left, center, right, toast);
+  // "Invite X?" chip above the bar (a spoken invite asks first)
+  const askText = el('span', 'ask-text');
+  const askNo = button('ask-btn ask-no');
+  const askYes = button('ask-btn ask-yes');
+  const ask = el('div', 'invite-ask');
+  ask.setAttribute('role', 'group');
+  ask.append(askText, askNo, askYes);
+  root.append(left, center, right, toast, ask);
 
   // ---- invite dialog ----
   const dialogTitle = el('h2', 'dialog-title');
@@ -156,6 +163,7 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
     setAttr(dialogClose, 'aria-label', t('back'));
     setText(backBtn, t('back'));
     setText(sumTitle, t('summary'));
+    paintAsk();
     syncMic(true);
   }
 
@@ -175,6 +183,50 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
   if (talk && typeof talk.onChange === 'function') talk.onChange(() => syncMic(false));
   micBtn.addEventListener('contextmenu', (e) => e.preventDefault());
   micBtn.addEventListener('pointerup', () => micBtn.blur()); // a focused button would also react to Space, the talk key
+
+  // ---- live input level: a ring around the mic button that follows the voice ----
+  let levelTimer = 0;
+  // level is 0..1 (values above 1 are read as a percentage); the ring falls back to the plain pulse when levels stop coming
+  function setLevel(level) {
+    let v = Number(level);
+    if (!Number.isFinite(v)) v = 0;
+    if (v > 1) v /= 100;
+    v = Math.min(1, Math.max(0, v));
+    micBtn.style.setProperty('--lvl', v.toFixed(3));
+    micWrap.dataset.live = '1';
+    clearTimeout(levelTimer);
+    levelTimer = setTimeout(() => { delete micWrap.dataset.live; micBtn.style.removeProperty('--lvl'); }, 700);
+  }
+
+  // ---- invite chip ----
+  let askNames = null;
+  let askYesFn = null;
+  let askNoFn = null;
+  function paintAsk() {
+    if (!askNames) return;
+    setText(askText, fill(t('inviteAsk'), { name: askNames.join(', '), names: askNames.join(', ') }));
+    setText(askYes, t('inviteYes'));
+    setText(askNo, t('inviteNo'));
+  }
+  function closeAsk() {
+    askNames = null;
+    askYesFn = null;
+    askNoFn = null;
+    ask.classList.remove('show');
+    root.classList.remove('has-ask');
+  }
+  function askInvite(names, onYes, onNo) {
+    const list = [].concat(names || []).filter(Boolean);
+    if (!list.length) return closeAsk();
+    askNames = list;
+    askYesFn = onYes;
+    askNoFn = onNo;
+    paintAsk();
+    ask.classList.add('show');
+    root.classList.add('has-ask');
+  }
+  askYes.addEventListener('click', () => { const fn = askYesFn; closeAsk(); if (fn) fn(); });
+  askNo.addEventListener('click', () => { const fn = askNoFn; closeAsk(); if (fn) fn(); });
 
   // ---- chat input ----
   input.addEventListener('input', () => form.classList.toggle('has-text', input.value.trim() !== ''));
@@ -473,6 +525,9 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
 
   return {
     note,
+    setLevel,
+    askInvite,
+    closeInviteAsk: closeAsk,
     openInvite,
     closeInvite,
     openMenu,

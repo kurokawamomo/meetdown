@@ -49,5 +49,6 @@
   "claudeBin": "claude",
   "dryDeliver": false,
   "ui": {},
-  "speechSpeed": 1.0
+  "speechSpeed": 1.0,
+  "interimSeconds": 15
 }
