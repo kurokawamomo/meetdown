@@ -110,7 +110,19 @@ const chairName = () => (roster.participants().find((p) => p.chair) || {}).name 
 const inMeeting = (name) => roster.participants().some((p) => p.name === name);
 const labelOf = (name) => (roster.byName(name) || {}).label || name;
 const tasteOf = (p) => prefs.tastes[p.name] || prefs.defaultTaste || p.taste || CONFIG.defaultTaste || 'pixel';
-const publicParticipant = (p) => ({ name: p.name, label: p.label, status: p.status, chair: !!p.chair, taste: tasteOf(p), look: p.look || {}, address: p.address, title: p.title });
+// look.image is a local file path in config.json: the page only gets an opaque url for it
+const AVATAR_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+const avatarImages = new Map(); // url id -> file path
+function publicLook(look = {}) {
+  const { image, ...rest } = look;
+  const file = typeof image === 'string' ? image.replace(/^~(?=\/)/, process.env.HOME || '~') : '';
+  const ext = path.extname(file).toLowerCase();
+  if (!file || !AVATAR_TYPES[ext]) return rest;
+  const id = crypto.createHash('sha1').update(file).digest('hex').slice(0, 12) + ext;
+  avatarImages.set(id, file);
+  return { ...rest, imageUrl: '/avatar-image/' + id };
+}
+const publicParticipant = (p) => ({ name: p.name, label: p.label, status: p.status, chair: !!p.chair, taste: tasteOf(p), look: publicLook(p.look || {}), address: p.address, title: p.title });
 const rosterPayload = () => ({ participants: roster.participants().map(publicParticipant), baton });
 const emitRoster = () => { emit('roster', rosterPayload()); emit('baton', { holders: baton }); };
 const watchThoughts = () => thoughts.watch(roster.participants().map((p) => p.name));
@@ -454,6 +466,13 @@ const server = http.createServer(async (req, res) => {
       clients.add(res);
       req.on('close', () => clients.delete(res));
       return;
+    }
+    const avatarImage = url.pathname.match(/^\/avatar-image\/([0-9a-f]{12}\.[a-z]+)$/);
+    if (req.method === 'GET' && avatarImage) {
+      const file = avatarImages.get(avatarImage[1]);
+      if (!file || !fs.existsSync(file)) return sendRes(res, 404, 'not found', 'text/plain');
+      res.writeHead(200, { 'Content-Type': AVATAR_TYPES[path.extname(file).toLowerCase()], 'Cache-Control': 'no-store' });
+      return fs.createReadStream(file).pipe(res);
     }
     const shared = url.pathname.match(/^\/share\/([0-9a-f]{12}\.[a-z]+)$/);
     if (req.method === 'GET' && shared) {

@@ -2,7 +2,7 @@
 // with light mood effects: speaking ring pulse, thinking tilt, listening nod, surprised pop, away dim.
 //
 // create({ seed, look, label }) -> { el, mood, setMood(mood), destroy() }
-//   look: optional { color: '#rrggbb', letter: 'X' }
+//   look: optional { color: '#rrggbb', letter: 'X', imageUrl: '/avatar-image/...' } (the image, when set, fills the circle)
 
 import { MOODS } from './mood.js';
 
@@ -26,6 +26,29 @@ function inkFor(hex) {
   const lin = (v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
   const luma = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
   return luma < 0.3 ? '#fff' : `rgb(${rgb.map((v) => Math.round(v * 0.36)).join(',')})`;
+}
+
+// Letters that tell participants apart: when several labels share an initial ("labs-HQ", "labs-1"), each gets the
+// first letter after their common prefix ("H", "1"). Returns name -> letter for those that need one.
+export function distinctLetters(participants = []) {
+  const groups = new Map();
+  for (const p of participants) {
+    const label = String(p.label || p.name || '');
+    const k = initialOf(label);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push({ name: p.name, chars: Array.from(label) });
+  }
+  const out = {};
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    let n = 0;
+    while (list.every((x) => x.chars.length > n && x.chars[n].toLowerCase() === list[0].chars[n].toLowerCase())) n++;
+    for (const x of list) {
+      const rest = x.chars.slice(n).join('').replace(/^[^\p{L}\p{N}]+/u, '');
+      if (rest) out[x.name] = initialOf(rest);
+    }
+  }
+  return out;
 }
 
 export function initialOf(text) {
@@ -76,14 +99,16 @@ function ensureStyle() {
   document.head.appendChild(el);
 }
 
-function build({ color, ink, letter, label }) {
+function build({ color, ink, letter, label, image, clip }) {
   const z = (cls, x, y, k) => `<g transform="translate(${x} ${y}) scale(${k})"><path class="mt-z ${cls}" d="M0 0L14 0L0 16L14 16" fill="none" stroke="#e8eaed" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></g>`;
   return `<svg class="mt-root mt-m-idle" viewBox="0 0 240 240" role="img" aria-label="${label}" style="--mt-ink:${ink}">` +
     `<g class="mt-pose">` +
     `<circle class="mt-ring mt-ring-1" cx="120" cy="124" r="88" fill="none" stroke="${color}" stroke-width="6"/>` +
     `<circle class="mt-ring mt-ring-2" cx="120" cy="124" r="88" fill="none" stroke="${color}" stroke-width="6"/>` +
     `<circle class="mt-disc" cx="120" cy="124" r="88" fill="${color}"/>` +
-    `<text class="mt-letter" x="120" y="124" dy=".35em" text-anchor="middle">${esc(letter)}</text>` +
+    (image
+      ? `<clipPath id="${clip}"><circle cx="120" cy="124" r="88"/></clipPath><image href="${esc(image)}" x="32" y="36" width="176" height="176" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clip})"/>`
+      : `<text class="mt-letter" x="120" y="124" dy=".35em" text-anchor="middle">${esc(letter)}</text>`) +
     `</g>` +
     `<g class="mt-fx">` +
     `<g class="mt-fx-dots"><rect x="172" y="4" width="64" height="32" rx="16" fill="#ffffff" fill-opacity=".22"/><path d="M182 34L177 46L192 35Z" fill="#ffffff" fill-opacity=".22"/>` +
@@ -98,7 +123,8 @@ export function create({ seed = '', look = {}, label } = {}) {
   const l = look || {};
   const color = /^#[0-9a-f]{6}$/i.test(l.color || '') ? l.color : COLORS[hash32('mt|' + String(seed)) % COLORS.length];
   const tpl = document.createElement('template');
-  tpl.innerHTML = build({ color, ink: inkFor(color), letter: l.letter || initialOf(label || seed), label: esc(label || seed || 'avatar') });
+  const image = /^\/avatar-image\/[0-9a-f]{12}\.[a-z]+$/.test(l.imageUrl || '') ? l.imageUrl : '';
+  tpl.innerHTML = build({ color, ink: inkFor(color), letter: l.letter || initialOf(label || seed), label: esc(label || seed || 'avatar'), image, clip: 'mt-clip-' + hash32('clip|' + String(seed)).toString(36) });
   const el = tpl.content.firstElementChild;
   let mood = 'idle';
   return {

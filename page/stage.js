@@ -3,6 +3,7 @@
 // a hover toolbar with "remove" (asks once), and Meet's presenting layout while store.state.share is set
 // (big shared area, tiles in a strip). Everything it needs is read from store.state.
 import { moodOf, createMoodTracker } from './avatar/mood.js';
+import { distinctLetters } from './avatar/meet.js';
 
 const MIN_TILE_H = 120;
 const MIN_ASPECT = 0.5; // tiles may be tall (portrait) down to this width / height ...
@@ -169,7 +170,8 @@ export function createStage(root, { store, onDismiss, onShareClose, avatarFor, t
   }
 
   // avatarFor is called once per participant and kept; it is called again only when the taste or look changes
-  function mountAvatar(rec, p) {
+  function mountAvatar(rec, p, letter) {
+    if (letter && !(p.look && p.look.letter)) p = { ...p, look: { ...(p.look || {}), letter } };
     const key = (p.taste || '') + '|' + JSON.stringify(p.look || {});
     if (rec.avatarKey === key) return;
     rec.avatarKey = key;
@@ -283,7 +285,7 @@ export function createStage(root, { store, onDismiss, onShareClose, avatarFor, t
     const label = p.label || p.name;
     const sub = p.status === 'busy' || p.status === 'absent' ? t(p.status) : '';
     const holds = ctx.baton.has(p.name);
-    mountAvatar(rec, p);
+    mountAvatar(rec, p, ctx.letters[p.name]);
     setText(rec, 'label', rec.nameEl, label);
     setText(rec, 'chair', rec.chairEl, p.chair ? t('chair') : '');
     setText(rec, 'sub', rec.subEl, sub);
@@ -439,6 +441,7 @@ export function createStage(root, { store, onDismiss, onShareClose, avatarFor, t
       baton: holdersOf(s.baton),
       speaking: speakingNames(s),
       talking: !!talk && !!talk.state && talk.state !== 'idle',
+      letters: distinctLetters(people),
     };
 
     const seen = new Set();
