@@ -145,6 +145,21 @@ function publicLook(look = {}) {
 }
 const publicParticipant = (p) => ({ name: p.name, label: p.label, status: p.status, chair: !!p.chair, look: publicLook(p.look || {}), address: p.address, title: p.title });
 const rosterPayload = () => ({ participants: roster.participants().map(publicParticipant), baton });
+// A participant leaves (removed by the human, or saying goodbye on its own) and is told so
+async function dismiss(name) {
+  const p = roster.byName(name);
+  if (!p || !inMeeting(name)) return;
+  roster.leave(name);
+  baton = baton.filter((n) => n !== name);
+  watchThoughts();
+  awaiting.delete(name);
+  meeting.append(entry({ kind: 'leave', from: name, text: UI.left }));
+  emitRoster();
+  await courier.dismiss(meeting, p);
+}
+const leavingAfter = new Map(); // utterance id -> name: the goodbye is heard to the end, then the speaker leaves
+const LEAVE_FALLBACK_MS = 30000; // leave anyway when no page reports the goodbye as heard
+
 // Who was in the meeting, kept so a restarted server brings them back into the new meeting
 const LAST_PARTICIPANTS = path.join(STATE, 'last-participants.json');
 function rememberParticipants() {
@@ -369,6 +384,7 @@ const routes = {
     const u = meeting.list.find((x) => x.id === id);
     const next = { queued: ['playing', 'done'], playing: ['done'] };
     if (u && (next[u.play] || []).includes(state)) meeting.update(u, { play: state });
+    if (state === 'done' && leavingAfter.has(id)) { const name = leavingAfter.get(id); leavingAfter.delete(id); await dismiss(name); }
     ok(res);
   },
   // A spoken invite was confirmed or declined on the page
@@ -399,17 +415,8 @@ const routes = {
   },
   'POST /api/dismiss': async (req, res) => {
     const { name } = await json(req);
-    const p = roster.byName(name);
     ok(res);
-    if (p && inMeeting(name)) {
-      roster.leave(name);
-      baton = baton.filter((n) => n !== name);
-      watchThoughts();
-      awaiting.delete(name);
-      meeting.append(entry({ kind: 'leave', from: name, text: UI.left }));
-      emitRoster();
-      await courier.dismiss(meeting, p);
-    }
+    await dismiss(name);
   },
   'POST /api/leave': async (req, res) => { if (meeting.info().state === 'open') meeting.leave(GRACE_MS); ok(res); },
   'POST /api/back': async (req, res) => { if (meeting.info().state === 'leaving') meeting.back(); ok(res); },
@@ -433,7 +440,7 @@ const routes = {
   },
   // From an AI pane (meet-say): speak (big balloon) or murmur (small balloon, half volume); optionally pass the baton
   'POST /api/say': async (req, res) => {
-    const { pane, text, pass, kind } = await json(req);
+    const { pane, text, pass, kind, leave } = await json(req);
     const p = roster.byPane(pane);
     if (!p || !inMeeting(p.name) || meeting.info().state === 'closed') return sendRes(res, 403, 'this pane is not a participant of the meeting', 'text/plain; charset=utf-8');
     const t = String(text || '').trim();
@@ -444,7 +451,11 @@ const routes = {
     const u = meeting.append(entry({ kind: murmur ? 'murmur' : 'say', from: p.name, text: t, play: 'queued' }));
     if (murmur) { murmurIds.add(u.id); emit('murmur', { name: p.name, id: u.id, text: t }); }
     speech.speak(u.id, forSpeech(t), p.voice, p.style);
-    sendRes(res, 200, { note: `${murmur ? 'murmured' : 'spoken'} in the meeting (utterance ${u.id})` });
+    if (leave) {
+      leavingAfter.set(u.id, p.name);
+      setTimeout(() => { if (leavingAfter.delete(u.id)) dismiss(p.name); }, LEAVE_FALLBACK_MS);
+    }
+    sendRes(res, 200, { note: `${murmur ? 'murmured' : 'spoken'} in the meeting (utterance ${u.id})${leave ? '; you leave once it is heard' : ''}` });
     if (pass && inMeeting(pass) && pass !== p.name) {
       baton = [pass];
       meeting.append(entry({ kind: 'pass', from: p.name, to: [pass], text: t }));

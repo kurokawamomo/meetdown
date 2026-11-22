@@ -6,6 +6,7 @@ Usage: meet-say "what to say"                      speak (normal voice, big ball
        meet-say --share <path-or-url> ["caption"]  show a file (html, pdf, png, jpg, svg) or a URL to everyone
        meet-say --scroll <0-100>                   scroll the shared page
        meet-say --unshare                          stop sharing
+       meet-say --leave "goodbye"                  say goodbye and leave the meeting once it is heard
        meet-say --route <word> <name> [--once]     from now on <word> sends the baton to <name> (--once: this meeting only)
        meet-say --unroute <word>                   forget a route
 The speaker is identified by $TMUX_PANE; panes that are not participants are refused."""
@@ -43,12 +44,14 @@ elif args[:1] == ["--unroute"] and len(args) == 2:
 elif args[:1] == ["--scroll"] and len(args) == 2:
     post("/api/share", {"scroll": float(args[1])})
 else:
-    kind, pass_to = "speech", None
+    kind, pass_to, leave = "speech", None, False
     if args[:1] == ["--murmur"]:
         kind, args = "murmur", args[1:]
+    elif args[:1] == ["--leave"]:
+        leave, args = True, args[1:]
     elif len(args) >= 2 and args[0] == "--pass":
         pass_to, args = args[1], args[2:]
     text = " ".join(args).strip() or ("" if sys.stdin.isatty() else sys.stdin.read().strip())
     if not text:
         sys.exit("meet-say: nothing to say")
-    post("/api/say", {"text": text, "kind": kind, "pass": pass_to})
+    post("/api/say", {"text": text, "kind": kind, "pass": pass_to, "leave": leave})
