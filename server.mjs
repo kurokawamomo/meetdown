@@ -145,7 +145,14 @@ function publicLook(look = {}) {
 }
 const publicParticipant = (p) => ({ name: p.name, label: p.label, status: p.status, chair: !!p.chair, look: publicLook(p.look || {}), address: p.address, title: p.title });
 const rosterPayload = () => ({ participants: roster.participants().map(publicParticipant), baton });
-const emitRoster = () => { emit('roster', rosterPayload()); emit('baton', { holders: baton }); };
+// Who was in the meeting, kept so a restarted server brings them back into the new meeting
+const LAST_PARTICIPANTS = path.join(STATE, 'last-participants.json');
+function rememberParticipants() {
+  const names = roster.participants().map((p) => p.name);
+  if (names.length && meeting && meeting.info().state === 'open') fs.writeFileSync(LAST_PARTICIPANTS, JSON.stringify(names));
+}
+const lastParticipants = () => { try { return JSON.parse(fs.readFileSync(LAST_PARTICIPANTS, 'utf8')) || []; } catch (_) { return []; } };
+const emitRoster = () => { rememberParticipants(); emit('roster', rosterPayload()); emit('baton', { holders: baton }); };
 const watchThoughts = () => thoughts.watch(roster.participants().map((p) => p.name));
 const entry = (fields) => ({ to: [], maybe: [], aside: false, ...fields });
 const note = (text) => meeting.append(entry({ kind: 'note', from: 'system', text }));
@@ -165,7 +172,10 @@ function openMeeting() {
   thoughtIds.clear();
   awaiting.clear();
   roster.poll();
-  roster.reset(CONFIG.autoJoin || []);
+  const auto = CONFIG.autoJoin || [];
+  const back = lastParticipants().filter((n) => !auto.includes(n));
+  roster.reset([...auto, ...back]);
+  for (const p of roster.participants()) if (back.includes(p.name)) courier.greet(meeting, roster, p);
   watchThoughts();
   log('meeting open', meeting.info().id);
   emit('snapshot', snapshot());
@@ -174,6 +184,7 @@ function openMeeting() {
 async function endMeeting() {
   if (!meeting || meeting.info().state !== 'leaving') return;
   meeting.setState('closing');
+  fs.rmSync(LAST_PARTICIPANTS, { force: true }); // the owner left: the next meeting starts with the auto-join names only
   const lines = meeting.list
     .filter((u) => ['voice', 'text', 'say', 'murmur'].includes(u.kind) && u.text && !u.thought)
     .map((u) => ({ label: u.from === 'human' ? OWNER : labelOf(u.from), text: u.text, aside: !!u.aside, kind: u.kind }));
