@@ -66,6 +66,7 @@ Open the copied URL. The token is stored as a cookie, so later visits need only 
 | `sessionReadings` | how you pronounce tmux session names |
 | `interimSeconds` | how long each piece of a long talk is (the last one repeats) |
 | `autoEnd` | end a turn after `afterSeconds` of talk and `quietSeconds` of silence |
+| `handsFree` | after a tap-opened recording is sent, the microphone stays open and listens (see below). `enabled`, `startLevel`, `startMs`, `speakingLevel`, `speakingMs`, `minChars`, `quietSeconds`, `maxSeconds` |
 | `murmurMaxChars` | the longest murmur |
 | `thoughtVoice` | `true` reads a few words of each new thought, very quietly |
 
@@ -77,6 +78,14 @@ Open the copied URL. The token is stored as a cookie, so later visits need only 
 4. Hold the mic button (or Space) and say: "Reviewer, what are you working on?". The named session answers by voice.
 5. Ask it to show something. It runs `meet-say --share <file>` and the page switches to the presenting layout. Hover it to pin or close.
 6. Press the red button to leave. The meeting closes and everyone gets a summary.
+
+### Hands-free talk
+
+Hold the mic button as before: it records while held and sends on release. A tap instead opens the recording, and the next tap sends it. After that send the microphone stays open and the button shows "Listening". Another tap closes it.
+
+While listening, the AI voices play. If you speak again, a loud level that lasts `startMs` (at `startLevel` or above) starts a recording and cuts the voice that is playing. When you are quiet for `quietSeconds` the recording is sent. If the transcript has fewer than `minChars` letters, it is dropped and the page goes back to listening. A voice that was cut is not restored.
+
+While an AI voice plays, its echo can reach the microphone, so the stricter `speakingLevel` and `speakingMs` apply then. Echo cancellation is on for the microphone as well. `maxSeconds` is the longest single recording. `"enabled": false` brings back the old behaviour (a tap-opened recording closes the microphone when sent). The levels are on the scale of the bar's mic ring (0 to 1). The audio log page (`state/audio-diag.jsonl`) gets `listen-start`, `listen-speech`, `listen-end`, `listen-discard` (with `reason`: `short`, `chars`, `empty` or `closed`) and `listen-stop`, which show the thresholds that fit your room.
 
 ### meet-say (for the sessions)
 

@@ -8,6 +8,11 @@
 // Beyond the contract: the `unlock` option (called on every gesture, so the page can unlock audio), the
 // `enabled` option (a press that would start a recording is ignored while it returns false), `holdMs` may
 // be a function, onChange(fn) receives (state, error), and closeMic() releases the microphone.
+// Hands-free: a recording opened by a tap (not by holding) does not close the microphone when it is sent. The state
+// becomes 'listening': the microphone stays open and waits for the human to speak again. A loud level that lasts
+// (startLevel for startMs; higher while the AI voice is playing, so its own echo does not count) starts a recording,
+// cuts the AI voice (onPress), and when the human has been quiet for quietSeconds the recording is sent with
+// `min`: the server drops it when the transcript is shorter than minChars. A tap while listening closes the microphone.
 
 const DEFAULT_HOLD_MS = 300;
 const TICK_MS = 50;
@@ -15,6 +20,9 @@ const DEFAULT_INTERIM_SECONDS = 15;
 const PAUSE_THRESHOLD = 0.02; // RMS (0..1) below which the input counts as quiet
 const PAUSE_MS = 800;
 const LEVEL_GAIN = 4; // speech RMS is small; the level shown to the bar is RMS times this, capped at 1
+const START_GAP_MS = 200; // a loud run survives a dip this short (speech has gaps between syllables)
+// Levels are on the meter's scale (RMS times LEVEL_GAIN, 0..1); the numbers are config.json's `handsFree`
+export const HANDS_FREE_DEFAULTS = { enabled: true, startLevel: 0.35, startMs: 400, speakingLevel: 0.6, speakingMs: 600, minChars: 4, quietSeconds: 1, maxSeconds: 30 };
 const TEXT_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
 
 const call = (fn, ...args) => {
@@ -58,14 +66,42 @@ export function createPauseDetector({ threshold = PAUSE_THRESHOLD, holdMs = PAUS
   };
 }
 
+// Did the human start speaking? A level at or above `threshold` begins a run; dips shorter than gapMs do not end it.
+// feed(level, t, { threshold, ms }) -> 'none' (no run) | 'maybe' (a run, not yet ms long) | 'speech' (a run of ms)
+export function createStartDetector({ gapMs = START_GAP_MS } = {}) {
+  let since = null;
+  let lastLoud = null;
+  return {
+    feed(level, t, { threshold, ms }) {
+      if (level >= threshold) {
+        if (since === null) since = t;
+        lastLoud = t;
+      } else if (since !== null && t - lastLoud > gapMs) {
+        since = null;
+        lastLoud = null;
+      }
+      if (since === null) return 'none';
+      return t - since >= ms ? 'speech' : 'maybe';
+    },
+    reset() { since = null; lastLoud = null; },
+  };
+}
+
+// The listening-state recording ends when the human was quiet for quietMs after speaking, or it ran maxMs
+export function listenOver({ startedAt, quietSince, now, quietMs, maxMs }) {
+  if (maxMs > 0 && now - startedAt >= maxMs) return true;
+  return quietMs > 0 && quietSince != null && now - quietSince >= quietMs;
+}
+
 // The timing rules, free of the DOM and the microphone so they can be tested.
-// effects: { press(), start(), stop(send) }. States: 'idle' | 'holding' | 'toggled'.
-export function createTalkMachine({ holdMs = DEFAULT_HOLD_MS, now = () => Date.now(), effects = {}, onChange = () => {}, enabled = () => true } = {}) {
+// effects: { press(), start(), stop(send), listen(), unlisten() }. States: 'idle' | 'holding' | 'toggled' | 'listening'.
+// handsFree(): true when a tap-toggled recording goes on to 'listening' instead of 'idle'.
+export function createTalkMachine({ holdMs = DEFAULT_HOLD_MS, now = () => Date.now(), effects = {}, onChange = () => {}, enabled = () => true, handsFree = () => false } = {}) {
   let state = 'idle';
   let error = null;
   let downAt = 0;
   let source = null; // the input that is down right now: 'key' | 'pointer'
-  let stopTap = false; // toggled: the tap that will stop the recording is down
+  let stopTap = false; // toggled or listening: the tap that will stop the recording (or close the microphone) is down
 
   const limit = () => {
     const v = Number(typeof holdMs === 'function' ? holdMs() : holdMs);
@@ -86,9 +122,21 @@ export function createTalkMachine({ holdMs = DEFAULT_HOLD_MS, now = () => Date.n
       set('holding');
       call(effects.press);
       call(effects.start);
-    } else if (state === 'toggled') {
+    } else if (state === 'toggled' || state === 'listening') {
       source = from;
       stopTap = true;
+    }
+  }
+
+  // A tap-toggled recording is over and sent: keep listening, or go idle
+  function sent() {
+    if (handsFree()) {
+      set('listening');
+      call(effects.stop, true);
+      call(effects.listen);
+    } else {
+      set('idle');
+      call(effects.stop, true);
     }
   }
 
@@ -104,28 +152,44 @@ export function createTalkMachine({ holdMs = DEFAULT_HOLD_MS, now = () => Date.n
       }
     } else if (state === 'toggled' && stopTap) {
       stopTap = false;
+      sent();
+    } else if (state === 'listening' && stopTap) {
+      stopTap = false;
       set('idle');
-      call(effects.stop, true);
+      call(effects.unlisten);
     }
   }
 
   // The turn ended by rule (a long talk followed by a long silence): stop and send as if released
   function end() {
-    if (state === 'idle') return;
+    if (state !== 'holding' && state !== 'toggled') return;
+    const was = state;
     source = null;
     stopTap = false;
+    if (was === 'toggled') return sent();
     set('idle');
     call(effects.stop, true);
   }
 
+  // Close the microphone while listening (the meeting is over)
+  function leave() {
+    if (state !== 'listening') return;
+    source = null;
+    stopTap = false;
+    set('idle');
+    call(effects.unlisten);
+  }
+
   // The microphone could not start or stopped: back to idle, and the error goes out through onChange
   function fail(err) {
+    const was = state;
     source = null;
     stopTap = false;
     set('idle', err || new Error('recording failed'));
+    if (was === 'listening') call(effects.unlisten);
   }
 
-  return { down, up, end, fail, get state() { return state; }, get error() { return error; } };
+  return { down, up, end, leave, fail, get state() { return state; }, get error() { return error; } };
 }
 
 const browserMedia = () => ({
@@ -165,7 +229,10 @@ const defaultTyping = () => typeof document !== 'undefined' && isEditable(docume
 // autoEnd: { afterSeconds, quietSeconds } or a function returning it; a recording that ran afterSeconds and then
 // heard quietSeconds of silence is stopped and sent. 0 or missing turns it off.
 // interimSeconds: number or function; 0 turns the cutting off. onLevel(0..1) and onPause(bool) report the input.
-export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_INTERIM_SECONDS, autoEnd = null, onPress, onSend, onCancel, onLevel, onPause, onDiag, unlock, enabled, now, isTyping, media, timers = {} } = {}) {
+// handsFree: { enabled, startLevel, startMs, speakingLevel, speakingMs, minChars, quietSeconds, maxSeconds } or a function
+// returning it (see HANDS_FREE_DEFAULTS). isSpeaking(): the AI voice is audible. onHear(bool): a speech start was
+// detected while listening and its recording has not been sent yet.
+export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_INTERIM_SECONDS, autoEnd = null, handsFree = null, isSpeaking, onHear, onPress, onSend, onCancel, onLevel, onPause, onDiag, unlock, enabled, now, isTyping, media, timers = {} } = {}) {
   const clock = now || (() => Date.now());
   const every = timers.setInterval || ((fn, ms) => {
     const id = setInterval(fn, ms);
@@ -181,6 +248,10 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
     return Number.isFinite(v) ? v * 1000 : DEFAULT_INTERIM_SECONDS * 1000;
   };
   const detector = createPauseDetector();
+  const starter = createStartDetector();
+  const hf = () => ({ ...HANDS_FREE_DEFAULTS, ...((typeof handsFree === 'function' ? handsFree() : handsFree) || {}) });
+  let lis = null; // listening: { ticker, cand }
+  let hearing = false;
   let meter = null;
   let pausedNow = false;
   const listeners = new Set();
@@ -195,7 +266,8 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
     now,
     enabled,
     onChange: (state, error) => { for (const fn of [...listeners]) call(fn, state, error); },
-    effects: { press: () => call(onPress), start, stop },
+    handsFree: () => hf().enabled !== false && !!meter,
+    effects: { press: () => call(onPress), start, stop, listen, unlisten },
   });
 
   const diag = (event, data) => { if (onDiag) call(onDiag, event, data); };
@@ -242,6 +314,7 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
       t.addEventListener('ended', () => {
         diag('mic-ended', { current: stream === s });
         if (stream === s) { stream = null; closeMeter(); }
+        if (machine.state === 'listening' && !stream) machine.fail(new Error('The microphone stopped'));
         const a = cur;
         if (a && a.stream === s) { cur = null; finish(a, false); machine.fail(new Error('The microphone stopped')); }
       });
@@ -327,6 +400,94 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
       return;
     }
     closeSegment(seg, (blob) => emitPart(a, blob, part, true));
+  }
+
+  // ---- Listening: the microphone is open and waits for the human to speak again ----
+  const setHearing = (on) => {
+    if (hearing === on) return;
+    hearing = on;
+    call(onHear, on);
+  };
+
+  function listen() {
+    if (lis) return;
+    starter.reset();
+    lis = { ticker: null, cand: null };
+    diag('listen-start', { ...hf() });
+    lis.ticker = every(tickListen, TICK_MS);
+  }
+
+  function unlisten() {
+    const l = lis;
+    if (!l) return;
+    lis = null;
+    stopEvery(l.ticker);
+    if (l.cand) dropCandidate(l.cand, 'closed');
+    starter.reset();
+    setHearing(false);
+    call(onLevel, 0);
+    diag('listen-stop', {});
+  }
+
+  // A loud level begins a candidate recording at once, so the first words are not lost; it is dropped when the level does not last
+  function openCandidate(l, t, c) {
+    const a = { turn: newTurn(), part: 0, seg: null, segAt: 0, stream, mime: '', startedAt: t, quietSince: null, confirmed: false, finished: false, min: c.minChars };
+    try { beginSegment(a); } catch (e) { console.error(e); return; }
+    l.cand = a;
+  }
+
+  function dropCandidate(a, reason, extra = {}) {
+    if (a.finished) return;
+    a.finished = true;
+    if (lis && lis.cand === a) lis.cand = null;
+    starter.reset();
+    if (a.confirmed) setHearing(false);
+    diag('listen-discard', { reason, ms: clock() - a.startedAt, confirmed: a.confirmed, ...extra });
+    closeSegment(a.seg, () => {});
+  }
+
+  function endCandidate(a) {
+    a.finished = true;
+    if (lis && lis.cand === a) lis.cand = null;
+    starter.reset();
+    setHearing(false);
+    diag('listen-end', { ms: clock() - a.startedAt });
+    closeSegment(a.seg, (blob) => {
+      if (blob) call(onSend, blob, blob.type, { turn: a.turn, part: 0, final: true, min: a.min });
+      else diag('listen-discard', { reason: 'empty', confirmed: true });
+    });
+  }
+
+  function tickListen() {
+    const l = lis;
+    if (!l || !meter) return;
+    if (enabled && enabled() === false) return machine.leave();
+    const t = clock();
+    const rms = meter.read();
+    const level = Math.min(1, rms * LEVEL_GAIN);
+    call(onLevel, level);
+    const c = hf();
+    let speaking = false;
+    try { speaking = !!(isSpeaking && isSpeaking()); } catch (_) {}
+    const gate = speaking ? { threshold: Number(c.speakingLevel), ms: Number(c.speakingMs) } : { threshold: Number(c.startLevel), ms: Number(c.startMs) };
+    const a = l.cand;
+    if (a && a.confirmed) {
+      a.quietSince = rms < PAUSE_THRESHOLD ? a.quietSince ?? t : null;
+      if (listenOver({ startedAt: a.startedAt, quietSince: a.quietSince, now: t, quietMs: Number(c.quietSeconds) * 1000, maxMs: Number(c.maxSeconds) * 1000 })) endCandidate(a);
+      return;
+    }
+    const run = starter.feed(level, t, gate);
+    if (!a) {
+      if (run !== 'none') openCandidate(l, t, c);
+      return;
+    }
+    if (run === 'none') return dropCandidate(a, 'short');
+    if (run === 'speech') {
+      a.confirmed = true;
+      diag('listen-speech', { level: Math.round(level * 100) / 100, ms: t - a.startedAt, speaking, threshold: gate.threshold });
+      setHearing(true);
+      call(onPress); // cut the AI voice
+    }
   }
 
   const newTurn = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -421,6 +582,7 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
 
   // Stop using the microphone (the meeting ended); the next press asks for it again
   function closeMic() {
+    machine.leave();
     if (machine.state !== 'idle') return;
     if (stream) diag('mic-close', trackInfo(stream));
     if (stream) for (const t of stream.getTracks()) t.stop();

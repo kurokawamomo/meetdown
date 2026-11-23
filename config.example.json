@@ -61,5 +61,15 @@
   "autoEnd": {
     "afterSeconds": 15,
     "quietSeconds": 5
+  },
+  "handsFree": {
+    "enabled": true,
+    "startLevel": 0.35,
+    "startMs": 400,
+    "speakingLevel": 0.6,
+    "speakingMs": 600,
+    "minChars": 4,
+    "quietSeconds": 1,
+    "maxSeconds": 30
   }
 }

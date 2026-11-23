@@ -19,7 +19,7 @@ const RING = 339.3; // circumference of the countdown ring (r = 54)
 const GRACE_FALLBACK_MS = 10000;
 const FALLBACK_TASTES = ['pixel', 'meet'];
 // ui keys this module renders; a changed value anywhere in this list re-applies the texts
-const UI_KEYS = ['talk', 'placeholder', 'send', 'invite', 'inviteTitle', 'leave', 'back', 'summary', 'minutes', 'holding', 'toggled', 'inviteAsk', 'inviteYes', 'inviteNo'];
+const UI_KEYS = ['talk', 'placeholder', 'send', 'invite', 'inviteTitle', 'leave', 'back', 'summary', 'minutes', 'holding', 'toggled', 'listening', 'inviteAsk', 'inviteYes', 'inviteNo'];
 
 function el(tag, cls, html) {
   const e = document.createElement(tag);
@@ -172,7 +172,7 @@ export function createBar(root, { store, talk, onText, onInvite, onLeave, onBack
     micBtn.dataset.state = st;
     micWrap.dataset.state = st;
     micBtn.setAttribute('aria-pressed', String(st !== 'idle'));
-    const text = st === 'holding' ? t('holding') : st === 'toggled' ? t('toggled') : t('talk');
+    const text = st === 'holding' ? t('holding') : st === 'toggled' ? t('toggled') : st === 'listening' ? t('listening') : t('talk');
     setAttr(micBtn, 'aria-label', text);
     setAttr(micBtn, 'data-tip', text);
     setText(micHint, st === 'idle' ? '' : text);

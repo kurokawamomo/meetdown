@@ -15,6 +15,7 @@ import { createCourier } from './lib/courier.mjs';
 import { createSpeech } from './lib/speech.mjs';
 import { summarize } from './lib/summary.mjs';
 import { diagLines } from './lib/audio-diag.mjs';
+import { charCount, tooShort } from './lib/char-count.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
@@ -31,7 +32,7 @@ const UI = {
   summary: 'Summary', summaryFailed: 'Could not summarize', dismiss: 'Remove', minutes: 'Minutes', joined: 'joined', left: 'left',
   baton: 'Baton', inviteAsk: 'Invite {name}?', inviteYes: 'Invite', inviteNo: 'Not now', dismissConfirm: 'Remove {name} from the meeting?',
   dismissYes: 'Remove', dismissNo: 'Cancel', sharing: '{name} is presenting', passed: '{from} passed the baton to {to}', stopShare: 'Stop sharing', unpinShare: 'Unpin', pinShare: 'Pin', interim: 'Still talking', murmur: 'Murmur',
-  noReply: 'No spoken reply', toggled: 'Recording (tap to send)', holding: 'Recording (release to send)',
+  noReply: 'No spoken reply', toggled: 'Recording (tap to send)', holding: 'Recording (release to send)', listening: 'Listening (tap to close)',
   ...(CONFIG.ui || {}),
 };
 const fill = (s, v) => String(s).replace(/\{(\w+)\}/g, (_, k) => v[k] ?? '');
@@ -226,7 +227,7 @@ function emit(type, data) {
 }
 const snapshot = () => ({
   meeting: meeting.info(), list: meeting.list, ...rosterPayload(), ui: UI, lang: CONFIG.lang || 'en',
-  overlap: CONFIG.overlapSeconds ?? 0, holdMs: CONFIG.holdMs ?? 300, interimSeconds: CONFIG.interimSeconds ?? [25, 50, 75, 100, 125, 150, 175, 200], autoEnd: CONFIG.autoEnd ?? { afterSeconds: 15, quietSeconds: 5 },
+  overlap: CONFIG.overlapSeconds ?? 0, holdMs: CONFIG.holdMs ?? 300, interimSeconds: CONFIG.interimSeconds ?? [25, 50, 75, 100, 125, 150, 175, 200], autoEnd: CONFIG.autoEnd ?? { afterSeconds: 15, quietSeconds: 5 }, handsFree: CONFIG.handsFree ?? {},
   me: { owner: OWNER }, share, thoughts: Object.fromEntries(thoughtText),
 });
 setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 15000).unref();
@@ -376,10 +377,13 @@ const routes = {
     const turnId = url.searchParams.get('turn');
     const part = Number(url.searchParams.get('part') || 0);
     const final = !turnId || url.searchParams.get('final') === '1';
+    const min = Number(url.searchParams.get('min') || 0); // hands-free: a transcript shorter than this is not speech
     const r = await speech.transcribe(await read(req, speech.maxAudio));
     if (r.error) { emit('note', { text: r.error }); return sendRes(res, 200, { error: r.error }); }
     const text = (r.text || '').trim();
-    sendRes(res, 200, { text, ms: r.ms });
+    const dropped = final && tooShort(text, min);
+    sendRes(res, 200, { text, ms: r.ms, ...(dropped ? { dropped: true } : {}) });
+    if (dropped) return log('talk dropped', turnId, `${charCount(text)} chars < ${min}`);
     if (!final) return interimPart(turnId, part, text);
     const t = turnId && turns.get(turnId);
     if (t && text) t.parts.set(part, unwrap(text));

@@ -538,10 +538,10 @@ body[data-panel] .captions { left: calc(50% - 183px); width: min(760px, calc(100
 }
 .mic:hover { background: var(--mute-hover); }
 .mic .ico-on, .mic .ico-send { display: none; }
-.mic[data-state="holding"], .mic[data-state="toggled"] { background: var(--toggle); color: var(--on-blue); }
-.mic[data-state="holding"]:hover, .mic[data-state="toggled"]:hover { background: var(--toggle-hover); }
-.mic[data-state="holding"] .ico-off, .mic[data-state="toggled"] .ico-off { display: none; }
-.mic[data-state="holding"] .ico-on { display: block; }
+.mic[data-state="holding"], .mic[data-state="toggled"], .mic[data-state="listening"] { background: var(--toggle); color: var(--on-blue); }
+.mic[data-state="holding"]:hover, .mic[data-state="toggled"]:hover, .mic[data-state="listening"]:hover { background: var(--toggle-hover); }
+.mic[data-state="holding"] .ico-off, .mic[data-state="toggled"] .ico-off, .mic[data-state="listening"] .ico-off { display: none; }
+.mic[data-state="holding"] .ico-on, .mic[data-state="listening"] .ico-on { display: block; }
 .mic[data-state="toggled"] .ico-send { display: block; }
 .mic::before {
   content: "";
@@ -555,7 +555,7 @@ body[data-panel] .captions { left: calc(50% - 183px); width: min(760px, calc(100
 }
 .mic[data-state="holding"] { transform: scale(.95); }
 .mic[data-state="holding"]::before { animation: mic-pulse 1.2s ease-out infinite; }
-.mic[data-state="toggled"]::before { animation: mic-breathe 1.6s ease-in-out infinite; }
+.mic[data-state="toggled"]::before, .mic[data-state="listening"]::before { animation: mic-breathe 1.6s ease-in-out infinite; }
 .mic-hint {
   position: absolute;
   left: 50%;
@@ -574,7 +574,7 @@ body[data-panel] .captions { left: calc(50% - 183px); width: min(760px, calc(100
   transition: opacity .15s;
   z-index: 6;
 }
-.mic-wrap[data-state="holding"] .mic-hint, .mic-wrap[data-state="toggled"] .mic-hint { opacity: 1; }
+.mic-wrap[data-state="holding"] .mic-hint, .mic-wrap[data-state="toggled"] .mic-hint, .mic-wrap[data-state="listening"] .mic-hint { opacity: 1; }
 
 .chat {
   position: relative;
@@ -669,7 +669,7 @@ body[data-panel] .captions { left: calc(50% - 183px); width: min(760px, calc(100
     pointer-events: none;
     z-index: 30;
   }
-  .mic[data-state="holding"][data-tip]:hover::after, .mic[data-state="toggled"][data-tip]:hover::after { display: none; }
+  .mic[data-state="holding"][data-tip]:hover::after, .mic[data-state="toggled"][data-tip]:hover::after, .mic[data-state="listening"][data-tip]:hover::after { display: none; }
 }
 
 .toast {
@@ -693,8 +693,8 @@ body[data-panel] .captions { left: calc(50% - 183px); width: min(760px, calc(100
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 /* mic level: while recording, a ring follows the input level (the plain pulse is the fallback) */
-.mic-wrap[data-live] .mic[data-state="holding"]::before, .mic-wrap[data-live] .mic[data-state="toggled"]::before { animation: none; opacity: 0; }
-.mic-wrap[data-live] .mic[data-state="holding"], .mic-wrap[data-live] .mic[data-state="toggled"] {
+.mic-wrap[data-live] .mic[data-state="holding"]::before, .mic-wrap[data-live] .mic[data-state="toggled"]::before, .mic-wrap[data-live] .mic[data-state="listening"]::before { animation: none; opacity: 0; }
+.mic-wrap[data-live] .mic[data-state="holding"], .mic-wrap[data-live] .mic[data-state="toggled"], .mic-wrap[data-live] .mic[data-state="listening"] {
   box-shadow: 0 0 0 calc(2px + var(--lvl, 0) * 12px) rgba(174, 198, 246, calc(.25 + var(--lvl, 0) * .35));
   transition: box-shadow .08s linear, background .15s;
 }

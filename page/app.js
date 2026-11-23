@@ -104,11 +104,16 @@ async function sendRecording(blob, mime, info = {}) {
   if (final) say(ui().transcribing, TRANSCRIBING_MS);
   try {
     const q = new URLSearchParams({ turn, part: String(part), final: final ? '1' : '0' });
+    if (info.min) q.set('min', String(info.min)); // hands-free: the server drops a transcript shorter than this
     const res = await fetch('/api/talk?' + q, { method: 'POST', headers: { 'Content-Type': mime || 'application/octet-stream' }, body: blob });
     const d = await res.json().catch(() => null);
     if (!res.ok || !d) throw new Error((d && d.error) || 'HTTP ' + res.status);
     if (d.text) turnsWithText.add(turn);
-    if (final) {
+    if (d.dropped) { // hands-free: too short to be speech, back to listening
+      diag.log('listen-discard', { reason: 'chars', chars: [...d.text].length });
+      say('');
+      turnsWithText.delete(turn);
+    } else if (final) {
       say(d.error || (d.text || turnsWithText.has(turn) ? '' : ui().unheard));
       turnsWithText.delete(turn);
     }
@@ -117,10 +122,15 @@ async function sendRecording(blob, mime, info = {}) {
   }
 }
 
+let hearing = false;
+const syncHold = () => player.hold(talk.state !== 'idle' && (talk.state !== 'listening' || hearing)); // listening lets the AI voice play
 const talk = createTalk({
   holdMs: () => store.state.holdMs,
   interimSeconds: () => store.state.interimSeconds,
   autoEnd: () => store.state.autoEnd,
+  handsFree: () => store.state.handsFree,
+  isSpeaking: () => (store.state.speaking || []).length > 0, // the AI voice is audible: its echo must not count as the human
+  onHear: (on) => { hearing = on; syncHold(); }, // a speech start was detected: keep the AI voice quiet until the recording is sent
   enabled: () => !['closing', 'closed'].includes(store.state.meeting && store.state.meeting.state), // nothing to say to a finished meeting
   unlock: player.unlock,
   onDiag: diag.log,
@@ -133,7 +143,7 @@ const talk = createTalk({
   },
 });
 talk.onChange((state, error) => {
-  player.hold(state !== 'idle'); // no AI voice while the microphone is open
+  syncHold(); // no AI voice while the microphone records; while it only listens, the AI voice may play
   if (error) say((ui().micError || '') + error.message);
 });
 talk.bindKey(document);

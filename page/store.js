@@ -24,6 +24,7 @@ const serverDefaults = () => ({
   interim: {}, // live text of the turns being spoken: { [turn]: { text, parts: { [n]: text }, at } }
   interimSeconds: [15, 20, 25],
   autoEnd: { afterSeconds: 15, quietSeconds: 5 },
+  handsFree: {}, // the page's own defaults (HANDS_FREE_DEFAULTS in talk.js) fill what the server leaves out
   list: [],
   ui: {},
   lang: 'en',
