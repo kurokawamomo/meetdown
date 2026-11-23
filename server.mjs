@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Roster } from './lib/roster.mjs';
 import { Meeting } from './lib/meeting.mjs';
 import { resolveBaton, findInvites } from './lib/focus.mjs';
+import { crossSite } from './lib/cross-site.mjs';
 import { createThoughts } from './lib/thoughts.mjs';
 import { createCourier } from './lib/courier.mjs';
 import { createSpeech } from './lib/speech.mjs';
@@ -554,9 +555,10 @@ const server = http.createServer(async (req, res) => {
     const t = url.searchParams.get('t');
     if (req.method === 'GET' && url.pathname === '/' && t) {
       if (!same(t)) return sendRes(res, 403, 'forbidden', 'text/plain');
-      res.writeHead(303, { 'Set-Cookie': `meetdown=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`, Location: '/' });
+      res.writeHead(303, { 'Set-Cookie': `meetdown=${TOKEN}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000`, Location: '/' });
       return res.end();
     }
+    if (crossSite({ method: req.method, host: req.headers.host, origin: req.headers.origin, fetchSite: req.headers['sec-fetch-site'] })) return sendRes(res, 403, 'forbidden', 'text/plain');
     if (!same(cookieToken(req)) && !same(req.headers['x-token'])) return sendRes(res, 403, 'forbidden', 'text/plain');
 
     if (req.method === 'GET' && url.pathname === '/events') {
