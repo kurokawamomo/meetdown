@@ -24,6 +24,7 @@ const SHORT_MURMUR = 10; // characters
 const LOUD_INPUT = 0.35; // input level above which a murmur over the human is ducked
 const DUCKED_GAIN = 0.2;
 const THOUGHT_GAIN = 0.15;
+const FRESH_GESTURE_MS = 1000; // a gesture this recent still lets a new context start
 const HEARD_IN_PART_SEC = 10; // a half-heard utterance still counts as "playing" this long after a sentence ended
 
 export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSentence, onClear, onMurmur, env = {} } = {}) {
@@ -63,8 +64,13 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     ctx.onstatechange = () => { tick(); pump(); pumpMurmurs(); };
     return true;
   }
-  function unlock() {
+  function unlock(gesture) {
     if (!ctx && !makeContext()) return;
+    if (gesture !== false) { // event listeners pass the event; only the visibility handler passes false
+      lastGestureAt = now();
+      if (renewPending) renewNow(); // inside a gesture the new context may start by itself
+      if (!ctx) return;
+    }
     if (ctx.state !== 'running') {
       const p = ctx.resume();
       if (p && typeof p.then === 'function') p.then(() => { tick(); pump(); }, () => {});
@@ -191,24 +197,29 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     if (key !== spoken) { spoken = key; call(onSpeaking, names); }
     if (mwaiting.length) pumpMurmurs();
     if (!items.length && !mplaying && !mwaiting.length && timer) { stopEvery(timer); timer = null; }
-    if (renewPending) renewOutput();
   }
 
   // ---- Output renewal (Safari) ----
   // After the microphone has been opened and closed, WebKit can leave an AudioContext that reports "running" and
   // accepts sources but makes no sound until the browser restarts. So when the microphone is released the context
   // is closed and a new one is made. Decoded AudioBuffers belong to no context and play in the new one.
-  // Nothing is renewed while a sentence is being decoded (the decode would fail on a closed context) or while
-  // anything is scheduled or sounding; it is retried from tick() until the player is idle.
+  // A context made outside a user gesture stays suspended until the next click (autoEnd and the release timer
+  // run outside one), so renewOutput() only marks the renewal as needed; it happens in the next unlock(), which
+  // runs inside a gesture, or in hold(false) when a gesture has just happened. Nothing is renewed while a sentence
+  // is being decoded (the decode would fail on a closed context) or while anything is scheduled, sounding or held.
   const isSafari = () => {
     if (typeof env.renewOutput === 'boolean') return env.renewOutput;
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
     return /Safari\//.test(ua) && !/Chrome\/|Chromium\/|CriOS\/|FxiOS\/|Edg\//.test(ua);
   };
   let renewPending = false;
-  function renewOutput() {
-    if (!ctx) return; // not unlocked yet: nothing to renew
-    if (!renewPending) { if (!isSafari()) return; renewPending = true; }
+  let lastGestureAt = -Infinity;
+  const now = env.now || (() => Date.now());
+  function renewOutput() { // the microphone was released: mark only
+    if (ctx && isSafari()) renewPending = true;
+  }
+  function renewNow() {
+    if (!ctx || !renewPending) return;
     if (held || pumping || mpumping || items.length || mplaying) return;
     renewPending = false;
     const old = ctx;
@@ -342,8 +353,8 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
       try { src.stop(); src.disconnect(); gain.disconnect(); } catch (_) {}
     }
     if (!held) {
-      if (was && ctx && isSafari()) renewPending = true; // the microphone was in use: renew before anything is put on the timeline
-      if (renewPending) renewOutput();
+      if (was) renewOutput(); // the microphone was in use
+      if (now() - lastGestureAt < FRESH_GESTURE_MS) renewNow(); // released by hand: renew before anything is put on the timeline
       pump();
       pumpMurmurs();
     }

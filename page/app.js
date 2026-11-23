@@ -133,7 +133,7 @@ talk.bindKey(document);
 
 // Audio can only start after a gesture; every kind of gesture tries again
 for (const type of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) document.addEventListener(type, player.unlock, { capture: true, passive: true });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) player.unlock(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) player.unlock(false); }); // not a gesture
 
 // ---- Meeting changes ----
 let meetingId = null;

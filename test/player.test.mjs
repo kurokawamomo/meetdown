@@ -31,6 +31,7 @@ class FakeContext {
   createGain() { return { gain: { value: 1, linearRampToValueAtTime() {}, setTargetAtTime() {} }, connect() {}, disconnect() {} }; }
 }
 
+const clock = { t: 100000 };
 const flush = () => new Promise((r) => setTimeout(r, 5));
 function setup(extra = {}) {
   contexts.length = 0;
@@ -39,6 +40,7 @@ function setup(extra = {}) {
     env: {
       AudioContext: FakeContext,
       renewOutput: true,
+      now: () => clock.t,
       setInterval: (fn) => { ticks.push(fn); return ticks.length; },
       clearInterval() {},
       fetch: async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }),
@@ -49,69 +51,97 @@ function setup(extra = {}) {
 }
 const sentence = (id, extra = {}) => ({ id, seq: 0, url: '/a/' + id, gap: 0, last: true, from: 'Ann', text: 'hi', ...extra });
 
-test('renewOutput does nothing before the first gesture made a context', () => {
-  const { player } = setup();
-  player.renewOutput();
-  assert.equal(contexts.length, 0);
-});
-
-test('renewOutput closes the old context and makes a running new one', async () => {
+test('renewOutput only marks: nothing is renewed outside a gesture', async () => {
   const { player } = setup();
   player.unlock();
-  assert.equal(contexts.length, 1);
+  clock.t += 60000; // the last gesture is long gone (autoEnd, the release timer)
   player.renewOutput();
   await flush();
-  assert.equal(contexts.length, 2);
-  assert.equal(contexts[0].closed, true);
-  assert.equal(contexts[1].closed, false);
-  assert.equal(contexts[1].state, 'running');
-});
-
-test('renewOutput is off outside Safari', () => {
-  const { player } = setup({ renewOutput: false });
-  player.unlock();
-  player.renewOutput();
   assert.equal(contexts.length, 1);
   assert.equal(contexts[0].closed, false);
 });
 
-test('a sentence queued after the renewal plays on the new context', async () => {
+test('the next unlock renews the context and resumes the new one', async () => {
   const { player } = setup();
   player.unlock();
+  clock.t += 60000;
   player.renewOutput();
+  player.unlock(); // a gesture
   await flush();
-  player.enqueue(sentence('u1'));
-  await flush();
-  assert.equal(contexts[0].sources.length, 0);
-  assert.equal(contexts[1].sources.length, 1);
-  assert.equal(contexts[1].sources[0].at, 0);
+  assert.equal(contexts.length, 2);
+  assert.equal(contexts[0].closed, true);
+  assert.equal(contexts[1].state, 'running');
 });
 
-test('a sentence decoded while held is kept and plays on the new context', async () => {
+test('an unlock that is not a gesture does not renew', async () => {
+  const { player } = setup();
+  player.unlock();
+  clock.t += 60000;
+  player.renewOutput();
+  player.unlock(false); // visibilitychange
+  await flush();
+  assert.equal(contexts.length, 1);
+});
+
+test('renewOutput before the first gesture, or outside Safari, marks nothing', () => {
+  const a = setup();
+  a.player.renewOutput();
+  a.player.unlock();
+  a.player.unlock();
+  assert.equal(contexts.length, 1);
+  const b = setup({ renewOutput: false });
+  b.player.unlock();
+  b.player.renewOutput();
+  b.player.unlock();
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0].closed, false);
+});
+
+test('released by hand: hold(false) right after a gesture renews before a sentence is scheduled', async () => {
   const { player } = setup();
   player.unlock();
   player.hold(true);
   player.enqueue(sentence('u1'));
   await flush();
-  player.hold(false); // the microphone is released
+  clock.t += 300;
+  player.unlock(); // pointerup, the microphone is still held at this moment
+  assert.equal(contexts.length, 1, 'held: not yet');
+  player.hold(false);
   await flush();
   assert.equal(contexts.length, 2);
   assert.equal(contexts[1].sources.length, 1);
 });
 
-test('the renewal waits while a sentence is scheduled and happens when it has ended', async () => {
+test('released by autoEnd: hold(false) alone does not renew; the next gesture does, before anything plays', async () => {
+  const { player } = setup();
+  player.unlock();
+  player.hold(true);
+  clock.t += 20000;
+  player.hold(false);
+  await flush();
+  assert.equal(contexts.length, 1);
+  player.enqueue(sentence('u1'));
+  await flush();
+  assert.equal(contexts[0].sources.length, 1, 'it plays on the old context until a gesture');
+  contexts[0].currentTime = 2;
+  contexts[0].sources[0].onended();
+  player.unlock();
+  await flush();
+  assert.equal(contexts.length, 2);
+});
+
+test('the renewal waits while a sentence is scheduled', async () => {
   const { player } = setup();
   player.unlock();
   player.enqueue(sentence('u1'));
   await flush();
-  const src = contexts[0].sources[0];
   player.renewOutput();
+  player.unlock();
   assert.equal(contexts.length, 1, 'not while something is scheduled');
-  contexts[0].currentTime = 2;
-  src.onended();
+  contexts[0].sources[0].onended();
+  player.unlock();
   await flush();
   assert.equal(contexts.length, 2);
-  assert.equal(contexts[0].closed, true);
 });
 
 test('the renewal waits while the microphone is open', async () => {
@@ -119,8 +149,9 @@ test('the renewal waits while the microphone is open', async () => {
   player.unlock();
   player.hold(true);
   player.renewOutput();
+  player.unlock();
   assert.equal(contexts.length, 1);
-  player.hold(false);
+  player.hold(false); // the gesture was fresh
   await flush();
   assert.equal(contexts.length, 2);
 });
@@ -130,12 +161,25 @@ test('the timeline restarts at zero after a renewal', async () => {
   player.unlock();
   player.enqueue(sentence('u1'));
   await flush();
-  player.renewOutput();
   contexts[0].currentTime = 5;
   contexts[0].sources[0].onended();
+  player.renewOutput();
+  player.unlock();
   await flush();
   assert.equal(contexts.length, 2);
   player.enqueue(sentence('u2'));
   await flush();
   assert.equal(contexts[1].sources[0].at, 0);
+});
+
+test('a sentence queued after the renewal plays on the new context', async () => {
+  const { player } = setup();
+  player.unlock();
+  player.renewOutput();
+  player.unlock();
+  await flush();
+  player.enqueue(sentence('u1'));
+  await flush();
+  assert.equal(contexts[0].sources.length, 0);
+  assert.equal(contexts[1].sources.length, 1);
 });
