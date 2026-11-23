@@ -84,6 +84,7 @@ Open the copied URL. The token is stored as a cookie, so later visits need only 
 meet-say "what to say"                      speak (needs the baton)
 meet-say --murmur "short remark"            murmur, half volume, at most murmurMaxChars
 meet-say --pass <name> "why"                speak and hand the baton to <name>
+meet-say --take "what to say"               take the baton and speak (only when nobody holds it)
 meet-say --share <path-or-url> ["caption"]  share a file (html, pdf, png, jpg, svg) or a URL
 meet-say --scroll <0-100> | --unshare       scroll or stop the shared page
 meet-say --route <word> <name> [--once]     from now on <word> sends the baton to <name>

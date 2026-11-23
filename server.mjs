@@ -447,13 +447,20 @@ const routes = {
   },
   // From an AI pane (meet-say): speak (big balloon) or murmur (small balloon, half volume); optionally pass the baton
   'POST /api/say': async (req, res) => {
-    const { pane, text, pass, kind, leave } = await json(req);
+    const { pane, text, pass, kind, leave, take } = await json(req);
     const p = roster.byPane(pane);
     if (!p || !inMeeting(p.name) || meeting.info().state === 'closed') return sendRes(res, 403, 'this pane is not a participant of the meeting', 'text/plain; charset=utf-8');
     const t = String(text || '').trim();
     if (!t) return sendRes(res, 400, 'nothing to say', 'text/plain; charset=utf-8');
     const murmur = kind === 'murmur';
     if (murmur && [...t].length > MURMUR_MAX) return sendRes(res, 400, `a murmur is at most ${MURMUR_MAX} characters (this one has ${[...t].length}); shorten it, or wait for the baton and speak`, 'text/plain; charset=utf-8');
+    if (take) { // meet-say --take: only when nobody in the meeting holds the baton
+      const held = baton.filter((n) => inMeeting(n) && n !== p.name);
+      if (held.length) return sendRes(res, 409, `${held.join(', ')} holds the baton; murmur instead, or wait for it`, 'text/plain; charset=utf-8');
+      baton = [p.name];
+      meeting.append(entry({ kind: 'take', from: p.name, text: t }));
+      emitRoster();
+    }
     awaiting.delete(p.name);
     const u = meeting.append(entry({ kind: murmur ? 'murmur' : 'say', from: p.name, text: t, play: 'queued' }));
     if (murmur) { murmurIds.add(u.id); emit('murmur', { name: p.name, id: u.id, text: t }); }
