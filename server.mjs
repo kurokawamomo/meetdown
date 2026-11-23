@@ -14,6 +14,7 @@ import { createThoughts } from './lib/thoughts.mjs';
 import { createCourier } from './lib/courier.mjs';
 import { createSpeech } from './lib/speech.mjs';
 import { summarize } from './lib/summary.mjs';
+import { diagLines } from './lib/audio-diag.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
@@ -51,6 +52,9 @@ fs.mkdirSync(MEETINGS, { recursive: true });
 fs.mkdirSync(SHARES, { recursive: true });
 
 const logFile = path.join(STATE, 'server.log');
+// What the page reports about its audio (for finding out why Safari goes silent); not part of any meeting record
+const AUDIO_DIAG = path.join(STATE, 'audio-diag.jsonl');
+const AUDIO_DIAG_MAX = 20 * 1024 * 1024; // stop appending beyond this; delete the file to start again
 const log = (...a) => {
   const line = new Date().toISOString() + ' ' + a.join(' ');
   console.log(line);
@@ -353,6 +357,15 @@ const routes = {
       if (u && u.kind === 'say' && (u.play === 'queued' || u.play === 'playing')) meeting.update(u, { play: 'dropped' });
     }
     emit('stop', {});
+    ok(res);
+  },
+  'POST /api/audio-diag': async (req, res) => {
+    const lines = diagLines(await json(req));
+    let size = 0;
+    try { size = fs.statSync(AUDIO_DIAG).size; } catch (_) {}
+    if (lines.length && size < AUDIO_DIAG_MAX) {
+      try { fs.appendFileSync(AUDIO_DIAG, lines.join('\n') + '\n'); } catch (e) { log('audio-diag write failed', e.message); }
+    }
     ok(res);
   },
   'POST /api/cancel': async (req, res) => { speech.cancel(); ok(res); },

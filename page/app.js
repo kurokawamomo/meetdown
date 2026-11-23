@@ -6,12 +6,17 @@ import { createPeople } from './people.js';
 import { createStore } from './store.js';
 import { createTalk } from './talk.js';
 import { createPlayer } from './player.js';
+import { createDiag } from './diag.js';
 import { createStage } from './stage.js';
 import { createBar } from './bar.js';
 import { createPanel } from './panel.js';
 import { avatarFor } from './avatar/index.js';
 
 const TRANSCRIBING_MS = 15000; // "transcribing" stays until the answer arrives, but not forever
+
+// What the page's audio is doing, reported to the server (state/audio-diag.jsonl) to find out why a voice can go silent
+const diag = createDiag();
+diag.log('page-open', { href: location.pathname, hidden: document.hidden });
 
 const store = createStore('/events'); // store.state.connected is false while the stream is down; the bar shows that itself
 const ui = () => store.state.ui;
@@ -58,6 +63,7 @@ const player = createPlayer({
   },
   onClear: (from) => stage && stage.clearSpeech(from),
   onMurmur: (id, from, text) => stage && stage.showMurmur(from, text),
+  onDiag: diag.log,
 });
 const queuedAudio = new Set(); // id/seq of sentences this page already has; a reconnect replays the unheard ones
 store.on('audio', (a) => {
@@ -117,6 +123,7 @@ const talk = createTalk({
   autoEnd: () => store.state.autoEnd,
   enabled: () => !['closing', 'closed'].includes(store.state.meeting && store.state.meeting.state), // nothing to say to a finished meeting
   unlock: player.unlock,
+  onDiag: diag.log,
   onPress: () => post('/api/press', player.stopAll(), { quiet: true }), // barge-in: stop the voices and tell the server what was cut
   onSend: sendRecording,
   onCancel: () => post('/api/cancel', {}, { quiet: true }),
@@ -133,7 +140,12 @@ talk.bindKey(document);
 
 // Audio can only start after a gesture; every kind of gesture tries again
 for (const type of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) document.addEventListener(type, player.unlock, { capture: true, passive: true });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) player.unlock(false); }); // not a gesture
+document.addEventListener('visibilitychange', () => { diag.log('visibility', { hidden: document.hidden }); if (!document.hidden) player.unlock(false); }); // not a gesture
+window.addEventListener('pagehide', () => { diag.log('pagehide', {}); diag.flush(); });
+window.addEventListener('focus', () => diag.log('focus', { focus: true }));
+window.addEventListener('blur', () => diag.log('focus', { focus: false }));
+store.on('connected', () => diag.log('sse', { connected: true }));
+store.on('disconnected', () => diag.log('sse', { connected: false }));
 
 // ---- Meeting changes ----
 let meetingId = null;

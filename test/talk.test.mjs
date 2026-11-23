@@ -143,6 +143,7 @@ function talkRig(options = {}) {
     onSend: (blob, mime) => events.push('send:' + blob.size + ':' + mime),
     onCancel: () => events.push('cancel'),
     unlock: () => events.push('unlock'),
+    onDiag: options.onDiag,
   });
   const target = new EventTarget();
   talk.bindKey(target);
@@ -261,4 +262,30 @@ test('the button: primary pointer only; down and up work like the key', async ()
   await settle();
   assert.equal(r.talk.state, 'idle');
   assert.deepEqual(r.events.filter((e) => e !== 'unlock'), ['press', 'send:3:audio/test']);
+});
+
+test('diag: the microphone opening and closing are reported with the track settings', async () => {
+  const seen = [];
+  const r = talkRig({ onDiag: (e, d) => seen.push([e, d]) });
+  r.mic.track.getSettings = () => ({ sampleRate: 48000, channelCount: 1, echoCancellation: true });
+  r.key('keydown');
+  await settle();
+  r.at(400);
+  r.key('keyup');
+  await settle();
+  r.talk.closeMic();
+  const open = seen.find(([e]) => e === 'mic-open');
+  assert.ok(open, 'mic-open');
+  assert.deepEqual([open[1].tracks, open[1].sampleRate, open[1].echoCancellation, open[1].readyState], [1, 48000, true, 'live']);
+  assert.ok(seen.some(([e]) => e === 'mic-close'), 'mic-close');
+});
+
+test('diag: a microphone that cannot be opened is reported with the reason', async () => {
+  const seen = [];
+  const err = Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' });
+  const r = talkRig({ failWith: err, onDiag: (e, d) => seen.push([e, d]) });
+  r.key('keydown');
+  await settle();
+  const f = seen.find(([e]) => e === 'mic-open-failed');
+  assert.deepEqual([f[1].name, f[1].message], ['NotAllowedError', 'Permission denied']);
 });

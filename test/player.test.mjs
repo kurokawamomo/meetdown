@@ -28,15 +28,21 @@ class FakeContext {
     this.sources.push(src);
     return src;
   }
+  createAnalyser() {
+    const an = { fftSize: 1024, level: 0, connect() {}, disconnect() {}, getFloatTimeDomainData: (a) => a.fill(an.level) };
+    this.analyser = an;
+    return an;
+  }
   createGain() { return { gain: { value: 1, linearRampToValueAtTime() {}, setTargetAtTime() {} }, connect() {}, disconnect() {} }; }
 }
 
 const clock = { t: 100000 };
 const flush = () => new Promise((r) => setTimeout(r, 5));
-function setup(extra = {}) {
+function setup(extra = {}, opts = {}) {
   contexts.length = 0;
   const ticks = [];
   const player = createPlayer({
+    ...opts,
     env: {
       AudioContext: FakeContext,
       renewOutput: true,
@@ -182,4 +188,64 @@ test('a sentence queued after the renewal plays on the new context', async () =>
   await flush();
   assert.equal(contexts[0].sources.length, 0);
   assert.equal(contexts[1].sources.length, 1);
+});
+
+test('diag: the context, unlock, renewal and each sentence are reported with the context state', async () => {
+  const events = [];
+  const { player } = setup({}, { onDiag: (e, d) => events.push([e, d]) });
+  player.unlock();
+  assert.deepEqual(events.map(([e]) => e).slice(0, 3), ['ctx-create', 'unlock', 'ctx-state']);
+  assert.equal(events[0][1].reason, 'unlock');
+  assert.equal(events[0][1].analyser, true);
+  assert.equal(events[0][1].ctx.gen, 1);
+  assert.equal(events[1][1].gesture, true);
+  player.enqueue(sentence('u1', { seq: 3 }));
+  await flush();
+  contexts[0].sources[0].onended();
+  const start = events.find(([e]) => e === 'play-start')[1];
+  assert.deepEqual([start.id, start.seq, start.from], ['u1', 3, 'Ann']);
+  const end = events.find(([e]) => e === 'play-end')[1];
+  assert.deepEqual([end.id, end.last, end.duration], ['u1', true, 1]);
+  assert.equal(end.ctx.state, 'running');
+});
+
+test('diag: the level of what plays is measured in front of the speakers', async () => {
+  const events = [];
+  const { player, ticks } = setup({}, { onDiag: (e, d) => events.push([e, d]) });
+  player.unlock();
+  player.enqueue(sentence('u1'));
+  await flush();
+  contexts[0].analyser.level = 0.25;
+  contexts[0].currentTime = 0.5;
+  for (const fn of ticks) fn(); // the player's own timer
+  contexts[0].analyser.level = 0;
+  for (const fn of ticks) fn();
+  contexts[0].sources[0].onended();
+  const end = events.find(([e]) => e === 'play-end')[1];
+  assert.equal(end.rmsMax, 0.25);
+  assert.equal(end.samples >= 2, true);
+  assert.equal(end.rmsMean < 0.25, true);
+});
+
+test('diag: a renewal reports its mark, the renewal itself and the new context', async () => {
+  const events = [];
+  const { player } = setup({}, { onDiag: (e, d) => events.push([e, d]) });
+  player.unlock();
+  player.renewOutput();
+  player.unlock();
+  await flush();
+  const names = events.map(([e]) => e);
+  assert.ok(names.includes('renew-mark'));
+  assert.ok(names.includes('ctx-renew'));
+  const created = events.filter(([e]) => e === 'ctx-create');
+  assert.deepEqual(created.map(([, d]) => d.reason), ['unlock', 'renew']);
+  assert.equal(created[1][1].ctx.gen, 2);
+});
+
+test('diag: a throwing reporter does not stop the player', async () => {
+  const { player } = setup({}, { onDiag: () => { throw new Error('x'); } });
+  player.unlock();
+  player.enqueue(sentence('u1'));
+  await flush();
+  assert.equal(contexts[0].sources.length, 1);
 });

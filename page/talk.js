@@ -151,6 +151,7 @@ const browserMedia = () => ({
         return rmsOf(buf);
       },
       close() { try { src.disconnect(); ctx.close(); } catch (_) {} },
+      info: () => ({ state: ctx.state, sampleRate: ctx.sampleRate, baseLatency: ctx.baseLatency }),
     };
   },
 });
@@ -164,7 +165,7 @@ const defaultTyping = () => typeof document !== 'undefined' && isEditable(docume
 // autoEnd: { afterSeconds, quietSeconds } or a function returning it; a recording that ran afterSeconds and then
 // heard quietSeconds of silence is stopped and sent. 0 or missing turns it off.
 // interimSeconds: number or function; 0 turns the cutting off. onLevel(0..1) and onPause(bool) report the input.
-export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_INTERIM_SECONDS, autoEnd = null, onPress, onSend, onCancel, onLevel, onPause, unlock, enabled, now, isTyping, media, timers = {} } = {}) {
+export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_INTERIM_SECONDS, autoEnd = null, onPress, onSend, onCancel, onLevel, onPause, onDiag, unlock, enabled, now, isTyping, media, timers = {} } = {}) {
   const clock = now || (() => Date.now());
   const every = timers.setInterval || ((fn, ms) => {
     const id = setInterval(fn, ms);
@@ -197,9 +198,19 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
     effects: { press: () => call(onPress), start, stop },
   });
 
+  const diag = (event, data) => { if (onDiag) call(onDiag, event, data); };
+  const trackInfo = (s) => {
+    const t = s.getAudioTracks()[0];
+    if (!t) return { tracks: 0 };
+    const set = typeof t.getSettings === 'function' ? t.getSettings() : {};
+    return { tracks: s.getAudioTracks().length, readyState: t.readyState, sampleRate: set.sampleRate, channelCount: set.channelCount, echoCancellation: set.echoCancellation, noiseSuppression: set.noiseSuppression, autoGainControl: set.autoGainControl };
+  };
   const live = (s) => s.getAudioTracks().some((t) => t.readyState === 'live');
   function closeMeter() {
-    if (meter) { try { meter.close(); } catch (_) {} }
+    if (meter) {
+      try { diag('meter-close', typeof meter.info === 'function' ? meter.info() : {}); } catch (_) {}
+      try { meter.close(); } catch (_) {}
+    }
     meter = null;
   }
   function ensureStream() {
@@ -210,9 +221,16 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
       opening = mic.getStream()
         .then((s) => {
           stream = s;
+          diag('mic-open', trackInfo(s));
           watch(s);
-          if (mic.createMeter) { try { meter = mic.createMeter(s); } catch (e) { console.error(e); meter = null; } }
+          if (mic.createMeter) {
+            try { meter = mic.createMeter(s); } catch (e) { console.error(e); meter = null; }
+            if (meter) { try { diag('meter-open', typeof meter.info === 'function' ? meter.info() : {}); } catch (_) {} }
+          }
           return s;
+        }, (e) => {
+          diag('mic-open-failed', { name: e && e.name, message: String((e && e.message) || e).slice(0, 200) });
+          throw e;
         })
         .finally(() => { opening = null; });
     }
@@ -222,6 +240,7 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
   function watch(s) {
     for (const t of s.getAudioTracks()) {
       t.addEventListener('ended', () => {
+        diag('mic-ended', { current: stream === s });
         if (stream === s) { stream = null; closeMeter(); }
         const a = cur;
         if (a && a.stream === s) { cur = null; finish(a, false); machine.fail(new Error('The microphone stopped')); }
@@ -403,6 +422,7 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
   // Stop using the microphone (the meeting ended); the next press asks for it again
   function closeMic() {
     if (machine.state !== 'idle') return;
+    if (stream) diag('mic-close', trackInfo(stream));
     if (stream) for (const t of stream.getTracks()) t.stop();
     stream = null;
     closeMeter();

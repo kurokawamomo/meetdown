@@ -27,8 +27,11 @@ const THOUGHT_GAIN = 0.15;
 const FRESH_GESTURE_MS = 1000; // a gesture this recent still lets a new context start
 const HEARD_IN_PART_SEC = 10; // a half-heard utterance still counts as "playing" this long after a sentence ended
 
-export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSentence, onClear, onMurmur, env = {} } = {}) {
+export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSentence, onClear, onMurmur, onDiag, env = {} } = {}) {
   let ctx = null;
+  let gen = 0; // how many contexts this player has made
+  let master = null; // passes every voice on to the speakers; its level tells whether sound leaves the page
+  let levelBuf = null;
   let held = false; // the human is recording: nothing new is scheduled
   let pumping = false;
   let nextAt = 0; // timeline position for the next sentence (previous end plus its gap)
@@ -56,16 +59,44 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     try { fn(...args); } catch (e) { console.error(e); }
   };
 
+  // Reports to onDiag: the event, what the context looks like now, and anything the caller adds
+  const ctxInfo = () => (ctx ? { gen, state: ctx.state, sampleRate: ctx.sampleRate, baseLatency: ctx.baseLatency, outputLatency: ctx.outputLatency, currentTime: Math.round(ctx.currentTime * 1000) / 1000 } : { gen, state: 'none' });
+  const diag = (event, extra) => { if (onDiag) call(onDiag, event, { ctx: ctxInfo(), ...extra }); };
+  const sink = () => master || ctx.destination;
+  // RMS (0..1) of what is being played, taken from the analyser in front of the speakers
+  function level() {
+    if (!master || !master.getFloatTimeDomainData) return 0;
+    try {
+      if (!levelBuf) levelBuf = new Float32Array(master.fftSize || 1024);
+      master.getFloatTimeDomainData(levelBuf);
+      let sum = 0;
+      for (let i = 0; i < levelBuf.length; i++) sum += levelBuf[i] * levelBuf[i];
+      return Math.sqrt(sum / levelBuf.length);
+    } catch (_) { return 0; }
+  }
+  const noteLevel = (box, v) => { box.rmsMax = Math.max(box.rmsMax || 0, v); box.rmsSum = (box.rmsSum || 0) + v; box.rmsN = (box.rmsN || 0) + 1; };
+  const levelOf = (box) => ({ rmsMax: Math.round((box.rmsMax || 0) * 10000) / 10000, rmsMean: box.rmsN ? Math.round((box.rmsSum / box.rmsN) * 10000) / 10000 : null, samples: box.rmsN || 0 });
+
   // ---- Browser audio unlock: needs a user gesture; safe to call on every gesture ----
-  function makeContext() {
+  function makeContext(reason) {
     const Ctor = env.AudioContext || (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext));
     if (!Ctor) return false;
     try { ctx = new Ctor(); } catch (e) { console.error(e); return false; }
-    ctx.onstatechange = () => { tick(); pump(); pumpMurmurs(); };
+    gen++;
+    levelBuf = null;
+    master = null;
+    try {
+      master = ctx.createAnalyser();
+      master.fftSize = 1024;
+      master.connect(ctx.destination);
+    } catch (_) { master = null; }
+    ctx.onstatechange = () => { diag('ctx-state', {}); tick(); pump(); pumpMurmurs(); };
+    diag('ctx-create', { reason, analyser: !!master });
     return true;
   }
   function unlock(gesture) {
-    if (!ctx && !makeContext()) return;
+    if (!ctx && !makeContext('unlock')) return;
+    diag('unlock', { gesture: gesture !== false, renewPending });
     if (gesture !== false) { // event listeners pass the event; only the visibility handler passes false
       lastGestureAt = now();
       if (renewPending) renewNow(); // inside a gesture the new context may start by itself
@@ -132,7 +163,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     const at = Math.max(ctx.currentTime, nextAt - (changed ? overlapSec() : 0));
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    src.connect(ctx.destination);
+    src.connect(sink());
     const it = { id: a.id, seq: a.seq, from: a.from, text: a.text, last: a.last, src, start: at, end: at + buf.duration, started: false };
     src.onended = () => ended(it);
     src.start(at);
@@ -147,6 +178,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     it.started = true;
     if (silenced.has(it.id)) return;
     between.delete(it.id);
+    diag('play-start', { id: it.id, seq: it.seq, from: it.from, late: ctx ? Math.round((ctx.currentTime - it.start) * 1000) / 1000 : null });
     if (!announced.has(it.id)) { announced.set(it.id, it.from); call(onPlay, it.id, it.from); }
     call(onSentence, it.from, it.text, it.id);
   }
@@ -163,6 +195,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     items.splice(i, 1);
     detach(it);
     if (!it.started) markStarted(it);
+    diag('play-end', { id: it.id, seq: it.seq, last: it.last, duration: Math.round((it.end - it.start) * 1000) / 1000, ...levelOf(it) });
     if (!silenced.has(it.id)) {
       if (it.last) { between.delete(it.id); finishUtterance(it.id, it.from); call(onDone, it.id); }
       else between.set(it.id, { seq: it.seq + 1, at: ctx.currentTime });
@@ -192,7 +225,13 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
       const t = ctx.currentTime;
       for (const it of items) if (!it.started && t >= it.start) markStarted(it);
     }
-    const names = [...new Set(audible().map((it) => it.from))];
+    const sounding = audible();
+    if (master && (sounding.length || mplaying)) {
+      const v = level();
+      for (const it of sounding) noteLevel(it, v);
+      if (mplaying) noteLevel(mplaying, v);
+    }
+    const names = [...new Set(sounding.map((it) => it.from))];
     const key = names.join('\n');
     if (key !== spoken) { spoken = key; call(onSpeaking, names); }
     if (mwaiting.length) pumpMurmurs();
@@ -217,18 +256,20 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
   const now = env.now || (() => Date.now());
   function renewOutput() { // the microphone was released: mark only
     if (ctx && isSafari()) renewPending = true;
+    diag('renew-mark', { marked: renewPending });
   }
   function renewNow() {
     if (!ctx || !renewPending) return;
     if (held || pumping || mpumping || items.length || mplaying) return;
     renewPending = false;
+    diag('ctx-renew', { sinceGesture: Math.round(now() - lastGestureAt) });
     const old = ctx;
     old.onstatechange = null;
     ctx = null;
     nextAt = 0; // the new timeline starts at 0
     lastFrom = null;
     try { const p = old.close(); if (p && typeof p.catch === 'function') p.catch(() => {}); } catch (_) {}
-    if (!makeContext()) return;
+    if (!makeContext('renew')) return;
     for (const b of between.values()) b.at = ctx.currentTime;
     const p = ctx.resume(); // may stay suspended until the next gesture; unlock() resumes it then
     if (p && typeof p.then === 'function') p.then(() => { tick(); pump(); pumpMurmurs(); }, () => {});
@@ -254,6 +295,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
       }
       if (best) playing = { id: best.id, seq: best.seq };
     }
+    diag('stop-all', { items: items.length, waiting: waiting.length, playing: playing ? playing.id : null });
     const pending = new Set();
     for (const it of items.splice(0)) { pending.add(it.id); kill(it); }
     for (const w of waiting.splice(0)) { pending.add(w.id); w.ctrl.abort(); }
@@ -322,16 +364,17 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     if (m.thought) gain.gain.linearRampToValueAtTime(0, ctx.currentTime + m.audio.duration * 0.5); // quiet from the start, gone by the middle
     src.buffer = m.audio;
     src.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(sink());
     mplaying = { src, gain, short: isShort(m), thought: m.thought };
     src.onended = () => {
       try { src.disconnect(); gain.disconnect(); } catch (_) {}
-      if (mplaying && mplaying.src === src) mplaying = null;
+      if (mplaying && mplaying.src === src) { diag('murmur-end', { id: m.id, ...levelOf(mplaying) }); mplaying = null; }
       tick();
       pump();
       pumpMurmurs();
     };
     src.start();
+    diag('murmur-start', { id: m.id, from: m.from, thought: m.thought });
     if (!timer) timer = every(tick, TICK_MS);
     if (!m.thought) call(onMurmur, m.id, m.from, m.text); // a thought already shows in its own balloon
   }
@@ -346,6 +389,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
   function hold(on) {
     const was = held;
     held = !!on;
+    if (held !== was) diag('hold', { held });
     if (held && mplaying && !mplaying.short) { // the human speaks: a sounding murmur stops at once (a short one may go on)
       const { src, gain } = mplaying;
       mplaying = null;
