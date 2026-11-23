@@ -155,7 +155,7 @@ import { createTalk } from '../page/talk.js';
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function listenRig({ speaking = false } = {}) {
+function listenRig({ speaking = false, autoEnd = null } = {}) {
   let t = 0;
   let rms = 0;
   let isSpeaking = speaking;
@@ -181,6 +181,7 @@ function listenRig({ speaking = false } = {}) {
     onCancel: () => events.push('cancel'),
     onDiag: (e) => events.push(`diag:${e}`),
     handsFree: { quietSeconds: 1 },
+    autoEnd,
   });
   const target = new EventTarget();
   talk.bindKey(target);
@@ -192,7 +193,7 @@ function listenRig({ speaking = false } = {}) {
     for (let i = 0; i < ms / 50; i++) { t += 50; for (const fn of [...tickers]) fn(); }
     await settle();
   };
-  return { talk, events, tap, run, setSpeaking: (v) => { isSpeaking = v; }, at: () => t };
+  return { talk, events, tap, key, run, setSpeaking: (v) => { isSpeaking = v; }, at: () => t };
 }
 
 async function intoListening(r) {
@@ -259,4 +260,39 @@ test('listening: a tap during a short burst also sends it (the server decides by
   await r.run(150, 0.6);
   await r.tap();
   assert.ok(r.events.includes('send:4:true'));
+});
+
+test('autoEnd ends a tap-opened recording by itself and goes on listening', async () => {
+  const r = listenRig({ autoEnd: { afterSeconds: 1, quietSeconds: 1 } });
+  await r.tap();
+  await r.run(500, 0.6);
+  await r.run(1500, 0);
+  assert.equal(r.talk.state, 'listening');
+  assert.ok(r.events.includes('send:undefined:true'));
+});
+
+test('autoEnd does not end a recording while the key is held; the release sends it', async () => {
+  const r = listenRig({ autoEnd: { afterSeconds: 1, quietSeconds: 1 } });
+  r.key('keydown');
+  await r.run(500, 0.6);
+  await r.run(5000, 0); // far longer than the auto-end rule
+  assert.equal(r.talk.state, 'holding');
+  assert.equal(r.events.some((e) => e.startsWith('send')), false);
+  r.key('keyup');
+  await r.run(100, 0);
+  assert.equal(r.talk.state, 'idle');
+  assert.ok(r.events.includes('send:undefined:true'));
+});
+
+test('listening: the quiet rule does not send while the key is held; the release sends it and closes', async () => {
+  const r = listenRig();
+  await intoListening(r);
+  await r.run(500, 0.6); // speech starts
+  r.key('keydown');
+  await r.run(3000, 0); // quiet for much longer than quietSeconds
+  assert.equal(r.events.some((e) => e.startsWith('send')), false);
+  r.key('keyup');
+  await r.run(100, 0);
+  assert.ok(r.events.includes('send:4:true'));
+  assert.equal(r.talk.state, 'idle');
 });

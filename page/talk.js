@@ -189,7 +189,7 @@ export function createTalkMachine({ holdMs = DEFAULT_HOLD_MS, now = () => Date.n
     if (was === 'listening') call(effects.unlisten);
   }
 
-  return { down, up, end, leave, fail, get state() { return state; }, get error() { return error; } };
+  return { down, up, end, leave, fail, get held() { return source !== null; }, get state() { return state; }, get error() { return error; } };
 }
 
 const browserMedia = () => ({
@@ -373,7 +373,8 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
       setPaused(detector.feed(rms, t));
       a.quietSince = rms < PAUSE_THRESHOLD ? a.quietSince ?? t : null;
       const ae = (typeof autoEnd === 'function' ? autoEnd() : autoEnd) || {};
-      if (turnOver({ startedAt: a.startedAt, quietSince: a.quietSince, now: t, afterMs: Number(ae.afterSeconds) * 1000, quietMs: Number(ae.quietSeconds) * 1000 })) {
+      // Only a tap-opened recording ends by itself; while a key or finger is down, the release ends it
+      if (machine.state === 'toggled' && !machine.held && turnOver({ startedAt: a.startedAt, quietSince: a.quietSince, now: t, afterMs: Number(ae.afterSeconds) * 1000, quietMs: Number(ae.quietSeconds) * 1000 })) {
         machine.end();
         return;
       }
@@ -472,6 +473,7 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
     const gate = speaking ? { threshold: Number(c.speakingLevel), ms: Number(c.speakingMs) } : { threshold: Number(c.startLevel), ms: Number(c.startMs) };
     const a = l.cand;
     if (a && a.confirmed) {
+      if (machine.held) return; // a key or finger is down: the release sends it
       a.quietSince = rms < PAUSE_THRESHOLD ? a.quietSince ?? t : null;
       if (listenOver({ startedAt: a.startedAt, quietSince: a.quietSince, now: t, quietMs: Number(c.quietSeconds) * 1000, maxMs: Number(c.maxSeconds) * 1000 })) endCandidate(a);
       return;
