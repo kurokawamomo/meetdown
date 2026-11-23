@@ -223,7 +223,7 @@ function emit(type, data) {
 }
 const snapshot = () => ({
   meeting: meeting.info(), list: meeting.list, ...rosterPayload(), ui: UI, lang: CONFIG.lang || 'en',
-  overlap: CONFIG.overlapSeconds ?? 0, holdMs: CONFIG.holdMs ?? 300, interimSeconds: CONFIG.interimSeconds ?? [15, 20, 25], autoEnd: CONFIG.autoEnd ?? { afterSeconds: 15, quietSeconds: 5 },
+  overlap: CONFIG.overlapSeconds ?? 0, holdMs: CONFIG.holdMs ?? 300, interimSeconds: CONFIG.interimSeconds ?? [25, 50, 75, 100, 125, 150, 175, 200], autoEnd: CONFIG.autoEnd ?? { afterSeconds: 15, quietSeconds: 5 },
   me: { owner: OWNER }, share, thoughts: Object.fromEntries(thoughtText),
 });
 setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 15000).unref();

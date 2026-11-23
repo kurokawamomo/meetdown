@@ -48,9 +48,14 @@
   "ui": {},
   "speechSpeed": 1.0,
   "interimSeconds": [
-    15,
-    20,
-    25
+    25,
+    50,
+    75,
+    100,
+    125,
+    150,
+    175,
+    200
   ],
   "murmurMaxChars": 30,
   "autoEnd": {

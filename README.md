@@ -18,7 +18,7 @@ flowchart LR
 
 ## What you get
 
-- Push to talk (hold, or tap to keep talking). Long talks are sent in growing pieces (15, 20, 25 s) so the others follow along, and a turn ends by itself after 15 s of talk and 5 s of silence.
+- Push to talk (hold, or tap to keep talking). Long talks are sent in pieces that grow by 25 s (25 s, 50 s, 75 s, ... up to 200 s) so the others follow along, and a turn ends by itself after 15 s of talk and 5 s of silence.
 - The baton: whoever you name answers by voice; the rest listen, or say a short murmur.
 - One voice at a time, by rule: nothing plays over you except a murmur of up to 10 characters.
 - Captions for everyone, a minutes panel, a People panel (talk to one, remove, invite), and screen sharing with pin and close.
