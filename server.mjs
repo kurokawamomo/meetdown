@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Roster } from './lib/roster.mjs';
 import { Meeting } from './lib/meeting.mjs';
@@ -15,6 +16,7 @@ import { createCourier } from './lib/courier.mjs';
 import { createSpeech } from './lib/speech.mjs';
 import { summarize } from './lib/summary.mjs';
 import { diagLines } from './lib/audio-diag.mjs';
+import { createHostAudio, WANTED as WANTED_HOST } from './lib/host-audio.mjs';
 import { charCount, tooShort } from './lib/char-count.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -56,6 +58,15 @@ const logFile = path.join(STATE, 'server.log');
 // What the page reports about its audio (for finding out why Safari goes silent); not part of any meeting record
 const AUDIO_DIAG = path.join(STATE, 'audio-diag.jsonl');
 const AUDIO_DIAG_MAX = 20 * 1024 * 1024; // stop appending beyond this; delete the file to start again
+const hostAudio = createHostAudio({
+  run: (cmd, args) => new Promise((done) => execFile(cmd, args, { timeout: 2000, maxBuffer: 1024 * 1024 }, (err, out) => done(err ? null : String(out)))),
+});
+function appendAudioDiag(lines) {
+  let size = 0;
+  try { size = fs.statSync(AUDIO_DIAG).size; } catch (_) {}
+  if (!lines.length || size >= AUDIO_DIAG_MAX) return;
+  try { fs.appendFileSync(AUDIO_DIAG, lines.join('\n') + '\n'); } catch (e) { log('audio-diag write failed', e.message); }
+}
 const log = (...a) => {
   const line = new Date().toISOString() + ' ' + a.join(' ');
   console.log(line);
@@ -361,13 +372,17 @@ const routes = {
     ok(res);
   },
   'POST /api/audio-diag': async (req, res) => {
-    const lines = diagLines(await json(req));
-    let size = 0;
-    try { size = fs.statSync(AUDIO_DIAG).size; } catch (_) {}
-    if (lines.length && size < AUDIO_DIAG_MAX) {
-      try { fs.appendFileSync(AUDIO_DIAG, lines.join('\n') + '\n'); } catch (e) { log('audio-diag write failed', e.message); }
-    }
+    const body = await json(req);
+    appendAudioDiag(diagLines(body));
     ok(res);
+    // Beside the page's report, what the Mac says about its audio now (at most one look per few seconds; the most recent event of the batch is the cause)
+    const events = Array.isArray(body && body.events) ? body.events : [];
+    const cause = [...events].reverse().find((e) => e && typeof e === 'object' && typeof e.event === 'string' && WANTED_HOST.has(e.event));
+    if (cause) {
+      hostAudio.look(cause).then((snap) => {
+        if (snap) appendAudioDiag(diagLines({ page: body.page, ua: body.ua, events: [{ ...snap, at: new Date().toISOString() }] }));
+      }).catch(() => {});
+    }
   },
   'POST /api/cancel': async (req, res) => { speech.cancel(); ok(res); },
   // Released: transcribe the recording and deliver it
