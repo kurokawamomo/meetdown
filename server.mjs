@@ -187,9 +187,8 @@ function openMeeting() {
   thoughtIds.clear();
   awaiting.clear();
   roster.poll();
-  const auto = CONFIG.autoJoin || [];
-  const back = lastParticipants().filter((n) => !auto.includes(n));
-  roster.reset([...auto, ...back]);
+  const back = lastParticipants(); // after a restart: exactly who was in, so someone removed stays out (the chair too)
+  roster.reset(back.length ? back : CONFIG.autoJoin || []);
   for (const p of roster.participants()) if (back.includes(p.name)) courier.greet(meeting, roster, p);
   watchThoughts();
   log('meeting open', meeting.info().id);

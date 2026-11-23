@@ -60,7 +60,7 @@ Open the copied URL. The token is stored as a cookie, so later visits need only 
 |---|---|
 | `owner` | your name, as the participants and captions show it |
 | `lang` | `ja` or `en` for the page text; put your own strings in `ui` |
-| `autoJoin` | sessions that join every new meeting (the chair) |
+| `autoJoin` | sessions that join every new meeting (the chair). After a server restart, the participants of the last meeting come back instead, so a removed chair stays out |
 | `people.<session>` | per session: `label`, `aliases` (words that call it), `voice` and `style` (VOICEVOX), `chair`, `look.letter`, `look.image` |
 | `voicePool` | voices for sessions not listed in `people` |
 | `sessionReadings` | how you pronounce tmux session names |
