@@ -241,3 +241,22 @@ test('listening: a tap closes it, and nothing more is sent', async () => {
   assert.equal(r.events.some((e) => e === 'press' || e.startsWith('send')), false);
   assert.ok(r.events.includes('diag:listen-stop'));
 });
+
+test('listening: a tap in the middle of talk sends what was said, then closes', async () => {
+  const r = listenRig();
+  await intoListening(r);
+  await r.run(500, 0.6); // speaking, not yet quiet
+  assert.equal(r.events.includes('send:4:true'), false);
+  await r.tap();
+  assert.equal(r.talk.state, 'idle');
+  assert.ok(r.events.includes('send:4:true'));
+  assert.ok(r.events.includes('unhear'));
+});
+
+test('listening: a tap during a short burst also sends it (the server decides by length)', async () => {
+  const r = listenRig();
+  await intoListening(r);
+  await r.run(150, 0.6);
+  await r.tap();
+  assert.ok(r.events.includes('send:4:true'));
+});

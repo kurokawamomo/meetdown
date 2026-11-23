@@ -422,7 +422,7 @@ export function createTalk({ holdMs = DEFAULT_HOLD_MS, interimSeconds = DEFAULT_
     if (!l) return;
     lis = null;
     stopEvery(l.ticker);
-    if (l.cand) dropCandidate(l.cand, 'closed');
+    if (l.cand) endCandidate(l.cand); // closed in the middle of talk: what was said so far still goes out (the server drops it when too short)
     starter.reset();
     setHearing(false);
     call(onLevel, 0);
