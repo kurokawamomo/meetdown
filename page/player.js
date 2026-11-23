@@ -56,13 +56,15 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
   };
 
   // ---- Browser audio unlock: needs a user gesture; safe to call on every gesture ----
+  function makeContext() {
+    const Ctor = env.AudioContext || (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext));
+    if (!Ctor) return false;
+    try { ctx = new Ctor(); } catch (e) { console.error(e); return false; }
+    ctx.onstatechange = () => { tick(); pump(); pumpMurmurs(); };
+    return true;
+  }
   function unlock() {
-    if (!ctx) {
-      const Ctor = env.AudioContext || (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext));
-      if (!Ctor) return;
-      try { ctx = new Ctor(); } catch (e) { return console.error(e); }
-      ctx.onstatechange = () => { tick(); pump(); pumpMurmurs(); };
-    }
+    if (!ctx && !makeContext()) return;
     if (ctx.state !== 'running') {
       const p = ctx.resume();
       if (p && typeof p.then === 'function') p.then(() => { tick(); pump(); }, () => {});
@@ -189,6 +191,38 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     if (key !== spoken) { spoken = key; call(onSpeaking, names); }
     if (mwaiting.length) pumpMurmurs();
     if (!items.length && !mplaying && !mwaiting.length && timer) { stopEvery(timer); timer = null; }
+    if (renewPending) renewOutput();
+  }
+
+  // ---- Output renewal (Safari) ----
+  // After the microphone has been opened and closed, WebKit can leave an AudioContext that reports "running" and
+  // accepts sources but makes no sound until the browser restarts. So when the microphone is released the context
+  // is closed and a new one is made. Decoded AudioBuffers belong to no context and play in the new one.
+  // Nothing is renewed while a sentence is being decoded (the decode would fail on a closed context) or while
+  // anything is scheduled or sounding; it is retried from tick() until the player is idle.
+  const isSafari = () => {
+    if (typeof env.renewOutput === 'boolean') return env.renewOutput;
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+    return /Safari\//.test(ua) && !/Chrome\/|Chromium\/|CriOS\/|FxiOS\/|Edg\//.test(ua);
+  };
+  let renewPending = false;
+  function renewOutput() {
+    if (!ctx) return; // not unlocked yet: nothing to renew
+    if (!renewPending) { if (!isSafari()) return; renewPending = true; }
+    if (held || pumping || mpumping || items.length || mplaying) return;
+    renewPending = false;
+    const old = ctx;
+    old.onstatechange = null;
+    ctx = null;
+    nextAt = 0; // the new timeline starts at 0
+    lastFrom = null;
+    try { const p = old.close(); if (p && typeof p.catch === 'function') p.catch(() => {}); } catch (_) {}
+    if (!makeContext()) return;
+    for (const b of between.values()) b.at = ctx.currentTime;
+    const p = ctx.resume(); // may stay suspended until the next gesture; unlock() resumes it then
+    if (p && typeof p.then === 'function') p.then(() => { tick(); pump(); pumpMurmurs(); }, () => {});
+    pump();
+    pumpMurmurs();
   }
 
   function speakingFrom() {
@@ -299,6 +333,7 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
 
   // Block (true) or allow (false) putting new sentences on the timeline; arrivals still download
   function hold(on) {
+    const was = held;
     held = !!on;
     if (held && mplaying && !mplaying.short) { // the human speaks: a sounding murmur stops at once (a short one may go on)
       const { src, gain } = mplaying;
@@ -306,7 +341,12 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
       src.onended = null;
       try { src.stop(); src.disconnect(); gain.disconnect(); } catch (_) {}
     }
-    if (!held) { pump(); pumpMurmurs(); }
+    if (!held) {
+      if (was && ctx && isSafari()) renewPending = true; // the microphone was in use: renew before anything is put on the timeline
+      if (renewPending) renewOutput();
+      pump();
+      pumpMurmurs();
+    }
   }
 
   // A new meeting restarts utterance ids: forget everything, including the silenced ids
@@ -316,5 +356,5 @@ export function createPlayer({ overlap = 1, onPlay, onDone, onSpeaking, onSenten
     silenced.clear();
   }
 
-  return { unlock, enqueue, stopAll, speakingFrom, silence, hold, setInputLevel, reset };
+  return { unlock, enqueue, stopAll, speakingFrom, silence, hold, setInputLevel, reset, renewOutput };
 }

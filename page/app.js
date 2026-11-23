@@ -145,13 +145,13 @@ store.on('snapshot', () => {
   }
 });
 store.on('meeting', (m) => {
-  if (m && m.state === 'closed') talk.closeMic();
+  if (m && m.state === 'closed') { talk.closeMic(); player.renewOutput(); } // Safari: the output can go silent after the microphone was used
 });
 
 // Release the microphone while another window has focus. An open voice-processing stream (echo cancellation)
 // makes other apps on the same machine record near silence, so a dictation tool in another window loses its words.
 // The stream is opened again on the next press.
-const releaseMic = () => setTimeout(() => { if (talk.state === 'idle') talk.closeMic(); }, 500);
+const releaseMic = () => setTimeout(() => { if (talk.state === 'idle') { talk.closeMic(); player.renewOutput(); } }, 500); // renewOutput: Safari can lose its output after the microphone was used
 window.addEventListener('blur', releaseMic);
 document.addEventListener('visibilitychange', () => { if (document.hidden) releaseMic(); });
 
